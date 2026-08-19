@@ -10,7 +10,7 @@ const proc = Bun.spawn(
     "--tracking",
     "mock",
     "--background",
-    "matte",
+    "virtual",
     "--output-size",
     "1920x1080",
     "--max-fps",

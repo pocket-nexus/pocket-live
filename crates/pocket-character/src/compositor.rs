@@ -16,11 +16,11 @@ struct Params {
     mode: u32,
     has_clean: u32,
     has_mask: u32,
-    _pad0: u32,
+    pass_index: u32,
     time: f32,
     mask_texel_x: f32,
     mask_texel_y: f32,
-    _pad1: f32,
+    output_aspect: f32,
 };
 
 struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
@@ -64,8 +64,37 @@ fn feathered_mask(uv: vec2f) -> f32 {
     return smoothstep(0.12, 0.88, mask);
 }
 
+fn split_camera_uv(uv: vec2f) -> vec2f {
+    let camera_size = vec2f(textureDimensions(camera_tex));
+    let camera_aspect = camera_size.x / max(camera_size.y, 1.0);
+    let pane_aspect = params.output_aspect * 0.5;
+    var mapped = vec2f(uv.x * 2.0, uv.y);
+    if camera_aspect > pane_aspect {
+        mapped.x = 0.5 + (mapped.x - 0.5) * pane_aspect / camera_aspect;
+    } else {
+        mapped.y = 0.5 + (mapped.y - 0.5) * camera_aspect / pane_aspect;
+    }
+    return mapped;
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4f {
+    if params.mode == 4u {
+        if params.pass_index == 1u {
+            let divider = abs(in.uv.x - 0.5) <= 0.0025;
+            if divider {
+                return vec4f(0.96, 0.12, 0.32, 1.0);
+            }
+            if in.uv.x < 0.5 {
+                return vec4f(textureSample(camera_tex, linear_sampler, split_camera_uv(in.uv)).rgb, 1.0);
+            }
+            discard;
+        }
+        // The first pass only fills transparent pixels. The avatar therefore
+        // remains over the comic background on the right; a source-replace
+        // second pass then guarantees that nothing can overlap the left pane.
+        return vec4f(select(comic_background(in.uv), textureSample(camera_tex, linear_sampler, split_camera_uv(in.uv)).rgb, in.uv.x < 0.5), 1.0);
+    }
     let camera = textureSample(camera_tex, linear_sampler, in.uv).rgb;
     let comic = comic_background(in.uv);
     let person = feathered_mask(in.uv);
@@ -92,6 +121,7 @@ pub enum BackgroundMode {
     Camera = 1,
     MatteVirtual = 2,
     CleanPlate = 3,
+    Split = 4,
 }
 
 impl BackgroundMode {
@@ -102,6 +132,7 @@ impl BackgroundMode {
             "camera" => Some(Self::Camera),
             "matte" => Some(Self::MatteVirtual),
             "clean" => Some(Self::CleanPlate),
+            "split" => Some(Self::Split),
             _ => None,
         }
     }
@@ -119,11 +150,11 @@ struct Params {
     mode: u32,
     has_clean: u32,
     has_mask: u32,
-    _pad0: u32,
+    pass_index: u32,
     time: f32,
     mask_texel_x: f32,
     mask_texel_y: f32,
-    _pad1: f32,
+    output_aspect: f32,
 }
 
 struct TextureResource {
@@ -136,6 +167,7 @@ struct Resources {
     clean: TextureResource,
     mask: TextureResource,
     bind: wgpu::BindGroup,
+    split_bind: wgpu::BindGroup,
     camera_size: (u32, u32),
     mask_size: (u32, u32),
 }
@@ -144,9 +176,11 @@ pub struct VideoCompositor {
     cfg: CompositorConfig,
     started: Instant,
     pipeline: wgpu::RenderPipeline,
+    split_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     params: wgpu::Buffer,
+    split_params: wgpu::Buffer,
     resources: Resources,
     last_sequence: u64,
     clean_captured: bool,
@@ -165,6 +199,12 @@ impl VideoCompositor {
         });
         let params = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pocket-live compositor params"),
+            size: std::mem::size_of::<Params>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let split_params = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pocket-live split compositor params"),
             size: std::mem::size_of::<Params>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -221,7 +261,42 @@ impl VideoCompositor {
                 multiview: None,
                 cache: None,
             });
-        let resources = create_resources(gpu, &layout, &sampler, &params, (1, 1), (1, 1));
+        let split_pipeline = gpu
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("pocket-live split overlay pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
+        let resources = create_resources(
+            gpu,
+            &layout,
+            &sampler,
+            &params,
+            &split_params,
+            (1, 1),
+            (1, 1),
+        );
         gpu.queue.write_texture(
             resources.camera.texture.as_image_copy(),
             &[0, 0, 0, 255],
@@ -240,9 +315,11 @@ impl VideoCompositor {
             cfg,
             started: Instant::now(),
             pipeline,
+            split_pipeline,
             layout,
             sampler,
             params,
+            split_params,
             resources,
             last_sequence: 0,
             clean_captured: false,
@@ -270,6 +347,7 @@ impl VideoCompositor {
                 &self.layout,
                 &self.sampler,
                 &self.params,
+                &self.split_params,
                 camera_size,
                 mask_size,
             );
@@ -317,16 +395,17 @@ impl VideoCompositor {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         time: f32,
+        output_size: (u32, u32),
     ) {
         let params = Params {
             mode: self.cfg.mode as u32,
             has_clean: u32::from(self.clean_captured),
             has_mask: u32::from(self.resources.mask_size != (1, 1)),
-            _pad0: 0,
+            pass_index: 0,
             time,
             mask_texel_x: 1.0 / self.resources.mask_size.0 as f32,
             mask_texel_y: 1.0 / self.resources.mask_size.1 as f32,
-            _pad1: 0.0,
+            output_aspect: output_size.0 as f32 / output_size.1.max(1) as f32,
         };
         gpu.queue
             .write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
@@ -347,6 +426,33 @@ impl VideoCompositor {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.resources.bind, &[]);
         pass.draw(0..3, 0..1);
+        drop(pass);
+
+        if self.cfg.mode == BackgroundMode::Split {
+            let split_params = Params {
+                pass_index: 1,
+                ..params
+            };
+            gpu.queue
+                .write_buffer(&self.split_params, 0, bytemuck::bytes_of(&split_params));
+            let mut split_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("pocket-live split camera overlay"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            split_pass.set_pipeline(&self.split_pipeline);
+            split_pass.set_bind_group(0, &self.resources.split_bind, &[]);
+            split_pass.draw(0..3, 0..1);
+        }
     }
 }
 
@@ -396,6 +502,7 @@ fn create_resources(
     layout: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
     params: &wgpu::Buffer,
+    split_params: &wgpu::Buffer,
     camera_size: (u32, u32),
     mask_size: (u32, u32),
 ) -> Resources {
@@ -417,37 +524,42 @@ fn create_resources(
         mask_size,
         wgpu::TextureFormat::R8Unorm,
     );
-    let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("pocket-live compositor bind"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&camera.view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(&clean.view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::TextureView(&mask.view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: params.as_entire_binding(),
-            },
-        ],
-    });
+    let create_bind = |label: &str, params: &wgpu::Buffer| {
+        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&camera.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&clean.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&mask.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: params.as_entire_binding(),
+                },
+            ],
+        })
+    };
+    let bind = create_bind("pocket-live compositor bind", params);
+    let split_bind = create_bind("pocket-live split compositor bind", split_params);
     Resources {
         camera,
         clean,
         mask,
         bind,
+        split_bind,
         camera_size,
         mask_size,
     }
@@ -521,6 +633,7 @@ mod tests {
             BackgroundMode::parse("clean"),
             Some(BackgroundMode::CleanPlate)
         );
+        assert_eq!(BackgroundMode::parse("split"), Some(BackgroundMode::Split));
         assert_eq!(BackgroundMode::parse("remote"), None);
     }
 }

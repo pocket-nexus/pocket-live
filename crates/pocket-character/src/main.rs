@@ -48,7 +48,7 @@ fn main() -> Result<()> {
         .map(|value| {
             BackgroundMode::parse(value).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "unknown --background mode '{value}'; expected transparent, virtual, camera, matte, or clean"
+                    "unknown --background mode '{value}'; expected transparent, virtual, camera, matte, clean, or split"
                 )
             })
         })

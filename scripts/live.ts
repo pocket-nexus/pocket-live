@@ -18,7 +18,7 @@ const proc = Bun.spawn(
     "--output-size",
     "1920x1080",
     "--background",
-    "matte",
+    "virtual",
     ...forwarded,
   ],
   {

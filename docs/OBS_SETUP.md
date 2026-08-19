@@ -16,15 +16,16 @@ bun run live
 target/release/pocket-character \
   --tracking camera \
   --output-size 1920x1080 \
-  --background matte \
+  --background virtual \
   --max-fps 60
 ```
 
 可选背景模式：
 
-- `--background matte`：保留房间，将 person matte 覆盖的真人区域换成漫画背景。
+- `--background virtual`：推荐直播模式；只输出数字人和虚拟背景，摄像头仅在后台驱动动作。
+- `--background split`：可选双屏模式；真人只在左屏，数字替身只在右屏，并用分割线硬隔离。
+- `--background matte`：旧的同屏换皮模式；保留房间，将 person matte 覆盖的真人区域换成漫画背景。
 - `--background clean --clean-plate-delay 5`：启动后五秒采集干净背景；倒计时内离开画面。
-- `--background virtual`：不显示真实摄像头背景，稳定性最高。
 - `--background camera`：显示摄像头原画，用于排障。
 - `--background transparent`：恢复原来的 450×600 透明桌面挂件模式。
 

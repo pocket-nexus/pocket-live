@@ -37,7 +37,9 @@ bun run live:benchmark
 bun run live:camera-smoke
 ```
 
-The live command opens an opaque 1920×1080, 60 fps final-composite window.
+The live command opens an opaque 1920×1080, 60 fps avatar-only window. The
+camera remains a local tracking input, but no camera pixels enter the rendered
+output. `--background split` remains available as an explicit alternate mode.
 OBS configuration and background-mode choices are documented in
 [docs/OBS_SETUP.md](docs/OBS_SETUP.md).
 
@@ -47,6 +49,7 @@ Useful direct host flags:
 target/release/pocket-character --tracking off
 target/release/pocket-character --tracking mock
 target/release/pocket-character --tracking camera --device CAMERA_UNIQUE_ID
+target/release/pocket-character --tracking camera --output-size 1920x1080 --background split
 target/release/pocket-character --tracking camera --output-size 1920x1080 --background matte
 target/release/pocket-character --tracking camera --output-size 1920x1080 --background clean --clean-plate-delay 5
 ```

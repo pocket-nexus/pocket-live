@@ -30,7 +30,7 @@ use pocket3d::model::{ModelAsset, ModelInstance, ModelLoadOptions};
 use pocket3d::renderer::Renderer;
 use pocket3d::scene::Scene;
 
-use crate::compositor::{CompositorConfig, VideoCompositor};
+use crate::compositor::{BackgroundMode, CompositorConfig, VideoCompositor};
 use crate::guest::{CharacterGuest, Command, TickEvent, TickState};
 use crate::tracking::{TrackingClient, VisionLaunch};
 
@@ -975,8 +975,22 @@ impl Game for Widget {
         self.anchor = Vec3::new(0.0, aabb.0.y + height * 0.72, 0.0);
         self.camera.fov_y = 40f32.to_radians();
         self.camera.znear = 0.05;
-        self.camera.pos = self.anchor + Vec3::new(0.0, 0.0, -1.0);
+        let split_screen = self
+            .cfg
+            .compositor
+            .is_some_and(|config| config.mode == BackgroundMode::Split);
+        let camera_distance = if split_screen { 1.35 } else { 1.0 };
+        self.camera.pos = self.anchor + Vec3::new(0.0, 0.0, -camera_distance);
         self.camera.look_at(self.anchor);
+        if split_screen {
+            let aspect = self.cfg.size.0 as f32 / self.cfg.size.1.max(1) as f32;
+            let distance = (self.camera.pos - self.anchor).length();
+            let half_visible_width = distance * (self.camera.fov_y * 0.5).tan() * aspect;
+            // This VRM faces +Z from a camera whose screen-right vector is
+            // world -X, hence the negative world translation.
+            self.scene.models[0].transform =
+                Mat4::from_translation(Vec3::new(-half_visible_width * 0.5, 0.0, 0.0));
+        }
         self.sim.look_base = self.camera.pos;
         self.sim.mouse_target = self.camera.pos;
 
@@ -1308,7 +1322,7 @@ impl Game for Widget {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         _format: wgpu::TextureFormat,
-        _size: (u32, u32),
+        size: (u32, u32),
     ) {
         let Some(compositor) = self.compositor.as_mut() else {
             return;
@@ -1320,7 +1334,7 @@ impl Game for Widget {
         {
             compositor.update(gpu, video);
         }
-        compositor.draw(gpu, encoder, view, self.scene.time);
+        compositor.draw(gpu, encoder, view, self.scene.time, size);
     }
 
     fn wants_exit(&self) -> bool {
