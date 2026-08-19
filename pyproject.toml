@@ -1,0 +1,12 @@
+[project]
+name = "pocket-live-tracking-runtime"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  # 1.0.1 hard-crashes in DrishtiMetalHelper on macOS even with the CPU
+  # delegate. 0.10.32 is the newest verified Apple Silicon runtime here.
+  "mediapipe==0.10.32",
+]
+
+[tool.uv]
+package = false

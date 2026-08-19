@@ -3,9 +3,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "setup": "cd vendor/pocketjs && bun install && cd ../.. && mkdir -p node_modules/@pocketjs && ln -sfn ../../vendor/pocketjs node_modules/@pocketjs/framework && ln -sfn ../vendor/pocketjs/node_modules/solid-js node_modules/solid-js && ln -sfn ../vendor/pocketjs/node_modules/bun-types node_modules/bun-types && bun scripts/fetch-assets.ts",
+    "setup": "cd vendor/pocketjs && bun install && cd ../.. && mkdir -p node_modules/@pocketjs && ln -sfn ../../vendor/pocketjs node_modules/@pocketjs/framework && ln -sfn ../vendor/pocketjs/node_modules/solid-js node_modules/solid-js && ln -sfn ../vendor/pocketjs/node_modules/bun-types node_modules/bun-types && bun scripts/apply-pocketjs-live-patch.ts && bun scripts/fetch-assets.ts && uv sync --frozen",
     "typecheck": "bun vendor/pocketjs/node_modules/typescript/bin/tsc --noEmit",
     "build:ui": "bun scripts/build-ui.ts",
-    "widget": "bun scripts/widget.ts"
+    "widget": "bun scripts/widget.ts",
+    "vision:build": "swift build -c release --package-path native/PocketVisionBridge",
+    "vision:mock": "swift run --package-path native/PocketVisionBridge pocket-vision-bridge --mock",
+    "vision:list": "swift run --package-path native/PocketVisionBridge pocket-vision-bridge --list-devices",
+    "assets:verify": "bun scripts/verify-assets.ts",
+    "offline:audit": "bun scripts/audit-offline.ts",
+    "offline:runtime": "bun scripts/runtime-offline-smoke.ts",
+    "live:build": "bun scripts/build-live.ts",
+    "live:diagnose": "bun scripts/diagnose.ts",
+    "live:benchmark": "bun scripts/benchmark.ts",
+    "live:window-smoke": "bun scripts/window-smoke.ts",
+    "live:camera-smoke": "bun scripts/camera-smoke.ts",
+    "live": "bun scripts/live.ts"
   }
 }

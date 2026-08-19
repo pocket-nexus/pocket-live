@@ -1,5 +1,59 @@
 # pocket-character
 
+> This workspace is extending the upstream character widget into **Pocket
+> Live**, a fully local macOS camera-to-VRM live pipeline. The executable
+> design, milestones, latency budget, and completion criteria are in
+> [TECHNICAL_PLAN.md](TECHNICAL_PLAN.md).
+
+## Pocket Live quick start
+
+Pocket Live is fully local. AVFoundation captures the camera, Apple Vision
+produces the person matte, and pinned MediaPipe Face/Pose/Hand Landmarkers read
+the same shared frame to produce semantic blendshapes, 33 body landmarks and
+21 landmarks per hand. Camera frames are not sent to QuickJS, written to disk,
+or sent to a network service; no LLM is used.
+
+```sh
+# Fetch pinned VRM/MediaPipe assets and install JS/Python dependencies.
+bun run setup
+
+# Build the Swift Vision bridge, QuickJS guest, and Rust release host.
+bun run live:build
+
+# Validate assets, the Swift/Rust protocol, cameras, and a tracked render.
+# This command only lists cameras; it does not open one.
+bun run live:diagnose
+
+# Optional explicit camera-pixel check (emits three tracking frames).
+bun run live:diagnose --camera
+
+# Start the local camera-driven Pocket window.
+bun run live
+
+# Verify full 1920x1080 render/compositor throughput on the local GPU.
+bun run live:benchmark
+
+# Open a real camera and verify face, pose, hands, matte and 1080p60 together.
+bun run live:camera-smoke
+```
+
+The live command opens an opaque 1920×1080, 60 fps final-composite window.
+OBS configuration and background-mode choices are documented in
+[docs/OBS_SETUP.md](docs/OBS_SETUP.md).
+
+Useful direct host flags:
+
+```sh
+target/release/pocket-character --tracking off
+target/release/pocket-character --tracking mock
+target/release/pocket-character --tracking camera --device CAMERA_UNIQUE_ID
+target/release/pocket-character --tracking camera --output-size 1920x1080 --background matte
+target/release/pocket-character --tracking camera --output-size 1920x1080 --background clean --clean-plate-delay 5
+```
+
+The sample VRM is for development verification. Replace it with an original,
+properly licensed spider-themed VRM before commercial use.
+
 A 3D digital-human desktop widget on the Pocket runtime family — the
 [airi](https://github.com/moeru-ai/airi) VRM stage, reimplemented as **one
 native process**: a transparent, always-on-top, frameless window rendering a
@@ -35,6 +89,9 @@ measurement section below for the answer.
 |---|---|
 | `crates/pocket-character` | macOS widget host (winit + wgpu via `pocket3d`) |
 | `crates/pocket-character-core` | portable behavior sim (blink/saccade/look-at) |
+| `crates/pocket-live-core` | tracking contract, calibration, filtering and gesture FSM |
+| `native/PocketVisionBridge` | AVFoundation capture, shared frames and Apple person matte |
+| `native/mediapipe_face_bridge.py` | pinned local face, pose and hand inference |
 | `app/` | guest bundle: `character` surface SDK + policy |
 | `scripts/` | Bun TS: asset fetch, bundle build, run, measurement |
 | `vendor/pocketjs` | the engine, pinned as a submodule |
@@ -46,13 +103,13 @@ The generic halves live in the PocketJS main repo:
 
 ## Manual verification, from scratch
 
-Prerequisites: a Rust toolchain (stable) and [Bun](https://bun.sh). macOS
-Apple Silicon is the measured platform.
+Prerequisites: a stable Rust toolchain, [Bun](https://bun.sh), Python 3.12 and
+[uv](https://docs.astral.sh/uv/). macOS Apple Silicon is the measured platform.
 
 ```sh
 # 1. Clone with the engine submodule
-git clone --recurse-submodules https://github.com/pocket-stack/pocket-character
-cd pocket-character
+git clone --recurse-submodules https://github.com/dozycat/pocket-live
+cd pocket-live
 
 # 2. One-time setup: vendored bun install, node_modules symlinks,
 #    and the model assets (downloaded, never committed)
@@ -121,9 +178,9 @@ hands-off settling, which is what `scripts/measure.ts` automates.
 
 ## Model & animation assets
 
-Fetched at setup, never committed: the VRoid sample-model terms and the
-animation's provenance are not MIT. Same posture as airi, which downloads
-them at build time.
+Fetched at setup and never committed: the VRoid sample, animation, and pinned
+MediaPipe task bundles. `assets/manifest.json` records exact byte lengths,
+SHA-256 digests, sources and license notes.
 
 ## Measurements
 

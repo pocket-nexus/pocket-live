@@ -21,6 +21,9 @@ onTick((state, events) => {
     // dead code out of the box). Keep the hook so a non-parity personality
     // can react.
     if (ev.type === "click") console.log("character: click at t =", state.t.toFixed(2));
+    if (ev.type === "webShootStart") {
+      console.log(`character: ${ev.hand} web shoot at t=${state.t.toFixed(2)}`);
+    }
   }
   // Heartbeat once a minute so long measurement runs show guest liveness.
   if (state.t - lastStatsLog >= 60) {

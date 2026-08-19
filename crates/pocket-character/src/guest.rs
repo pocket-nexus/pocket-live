@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use anyhow::{Result, anyhow};
+use pocket_live_core::Handedness;
 use pocket_mod::Guest;
 use pocket_mod::qjs::{Function, Object};
 
@@ -30,6 +31,10 @@ pub struct TickState {
     pub tracking: &'static str,
     pub fps: f32,
     pub frame_ms: f32,
+    pub body_tracking: &'static str,
+    pub tracking_weight: f32,
+    pub tracking_age_ms: f32,
+    pub calibration_progress: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +42,8 @@ pub enum TickEvent {
     Click,
     HoverStart,
     HoverEnd,
+    WebShootStart(Handedness),
+    WebShootEnd(Handedness),
 }
 
 impl TickEvent {
@@ -45,6 +52,18 @@ impl TickEvent {
             TickEvent::Click => "click",
             TickEvent::HoverStart => "hoverStart",
             TickEvent::HoverEnd => "hoverEnd",
+            TickEvent::WebShootStart(_) => "webShootStart",
+            TickEvent::WebShootEnd(_) => "webShootEnd",
+        }
+    }
+
+    fn hand(self) -> Option<&'static str> {
+        match self {
+            TickEvent::WebShootStart(Handedness::Left)
+            | TickEvent::WebShootEnd(Handedness::Left) => Some("left"),
+            TickEvent::WebShootStart(Handedness::Right)
+            | TickEvent::WebShootEnd(Handedness::Right) => Some("right"),
+            _ => None,
         }
     }
 }
@@ -121,11 +140,18 @@ impl CharacterGuest {
             s.set("tracking", state.tracking)?;
             s.set("fps", state.fps as f64)?;
             s.set("frameMs", state.frame_ms as f64)?;
+            s.set("bodyTracking", state.body_tracking)?;
+            s.set("trackingWeight", state.tracking_weight as f64)?;
+            s.set("trackingAgeMs", state.tracking_age_ms as f64)?;
+            s.set("calibrationProgress", state.calibration_progress as f64)?;
 
             let evs = pocket_mod::qjs::Array::new(ctx.clone())?;
             for (i, ev) in events.iter().enumerate() {
                 let o = Object::new(ctx.clone())?;
                 o.set("type", ev.name())?;
+                if let Some(hand) = ev.hand() {
+                    o.set("hand", hand)?;
+                }
                 evs.set(i, o)?;
             }
             dispatch

@@ -15,12 +15,22 @@ export interface CharacterState {
   fps: number;
   /** Mean full-frame CPU cost (ms) over the last second. */
   frameMs: number;
+  /** Local Apple Vision body-tracking lifecycle. */
+  bodyTracking: "off" | "idle" | "acquiring" | "tracking" | "holding" | "recovering";
+  /** Blend weight from the VRMA idle pose to the tracked pose. */
+  trackingWeight: number;
+  /** Age of the newest local tracking frame, in milliseconds. */
+  trackingAgeMs: number;
+  /** Startup neutral-pose calibration progress, 0..1. */
+  calibrationProgress: number;
 }
 
 export type CharacterEvent =
   | { type: "click" }
   | { type: "hoverStart" }
-  | { type: "hoverEnd" };
+  | { type: "hoverEnd" }
+  | { type: "webShootStart"; hand: "left" | "right" }
+  | { type: "webShootEnd"; hand: "left" | "right" };
 
 interface CharacterNs {
   __boot: {

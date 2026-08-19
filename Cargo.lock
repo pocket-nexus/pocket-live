@@ -1581,14 +1581,20 @@ name = "pocket-character"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "env_logger",
  "glam",
+ "libc",
  "log",
+ "memmap2",
  "pocket-character-core",
+ "pocket-live-core",
  "pocket-mod",
  "pocket-ui-wgpu",
  "pocket-vrm",
  "pocket3d",
+ "serde",
+ "serde_json",
  "wgpu",
  "winit",
 ]
@@ -1598,6 +1604,14 @@ name = "pocket-character-core"
 version = "0.1.0"
 dependencies = [
  "glam",
+]
+
+[[package]]
+name = "pocket-live-core"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde",
 ]
 
 [[package]]

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "path": "assets/AvatarSample_A.vrm",
+      "bytes": 26781812,
+      "sha256": "2a0ccd84880b03d7b65503d8b6287f7a97f3bb4fab70a5fd0a47b433c97827f5",
+      "source": "https://dist.ayaka.moe/vrm-models/VRoid-Hub/AvatarSample-A/AvatarSample_A.vrm",
+      "license_note": "VRoid official sample model; development verification only"
+    },
+    {
+      "path": "assets/idle_loop.vrma",
+      "bytes": 157664,
+      "sha256": "ace95ba6dcc0bdf2ed1081c002332b4184441117c8d543b6f642b3d2c5cf99be",
+      "source": "https://github.com/moeru-ai/airi",
+      "license_note": "Animation provenance follows the upstream AIRI repository"
+    },
+    {
+      "path": "assets/face_landmarker.task",
+      "bytes": 3758596,
+      "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+      "source": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+      "license_note": "Google MediaPipe Face Landmarker model bundle; verify upstream model terms for redistribution"
+    },
+    {
+      "path": "assets/pose_landmarker_lite.task",
+      "bytes": 5777746,
+      "sha256": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+      "source": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+      "license_note": "Google MediaPipe Pose Landmarker Lite model bundle; verify upstream model terms for redistribution"
+    },
+    {
+      "path": "assets/hand_landmarker.task",
+      "bytes": 7819105,
+      "sha256": "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1",
+      "source": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task",
+      "license_note": "Google MediaPipe Hand Landmarker model bundle; verify upstream model terms for redistribution"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+[package]
+name = "pocket-live-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Deterministic tracking, filtering, gesture, and pose primitives for Pocket Live"
+
+[dependencies]
+glam = { workspace = true }
+serde = { workspace = true }

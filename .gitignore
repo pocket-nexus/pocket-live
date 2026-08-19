@@ -4,5 +4,10 @@ dist/
 out/
 assets/*.vrm
 assets/*.vrma
+assets/*.task
 *.log
 .DS_Store
+artifacts/
+**/.build/
+.venv/
+__pycache__/
