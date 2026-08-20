@@ -54,6 +54,10 @@ impl TrackingLifecycle {
         self.weight
     }
 
+    pub fn reset(&mut self) {
+        *self = Self::new(self.cfg);
+    }
+
     /// Advance from a monotonically increasing capture timestamp.
     pub fn update(&mut self, now_ns: u64, valid_pose: bool) -> f32 {
         match self.state {
@@ -94,9 +98,11 @@ impl TrackingLifecycle {
             }
             TrackingState::Recovering => {
                 if valid_pose {
-                    self.enter(TrackingState::Acquiring, now_ns);
-                    self.valid_streak = 1;
-                    self.weight = self.acquisition_weight();
+                    // This pose was already acquired before the short loss.
+                    // Re-entering Acquiring would drop a partially recovered
+                    // weight back to 1/N and visibly pop the controlled bone.
+                    self.enter(TrackingState::Tracking, now_ns);
+                    self.weight = 1.0;
                 } else {
                     let elapsed = now_ns.saturating_sub(self.state_started_ns);
                     self.weight = 1.0 - elapsed as f32 / self.cfg.recover_ns as f32;
@@ -175,5 +181,34 @@ mod tests {
         t.update(100 * MS, false);
         assert_eq!(t.update(200 * MS, true), 1.0);
         assert_eq!(t.state(), TrackingState::Tracking);
+    }
+
+    #[test]
+    fn reset_returns_to_idle_without_changing_configuration() {
+        let mut lifecycle = tracker();
+        lifecycle.update(0, true);
+        lifecycle.update(16 * MS, true);
+        lifecycle.update(32 * MS, true);
+        lifecycle.reset();
+
+        assert_eq!(lifecycle.state(), TrackingState::Idle);
+        assert_eq!(lifecycle.weight(), 0.0);
+        assert_eq!(lifecycle.update(48 * MS, true), 1.0 / 3.0);
+    }
+
+    #[test]
+    fn recovery_reacquisition_never_drops_weight() {
+        let mut lifecycle = tracker();
+        lifecycle.update(0, true);
+        lifecycle.update(16 * MS, true);
+        lifecycle.update(32 * MS, true);
+        lifecycle.update(100 * MS, false);
+        lifecycle.update(350 * MS, false);
+        let recovering = lifecycle.update(600 * MS, false);
+        let reacquired = lifecycle.update(610 * MS, true);
+
+        assert!(reacquired >= recovering);
+        assert_eq!(reacquired, 1.0);
+        assert_eq!(lifecycle.state(), TrackingState::Tracking);
     }
 }

@@ -16,8 +16,8 @@ use pocket_live_core::{
     BodyCalibration, BodyCoordinateSpace, BodyJoint, BodyObservation, BodyPoseStabilizer,
     BodyStabilizerConfig, CalibrationAccumulator, FaceCalibrationAccumulator, FaceControlFilter,
     FaceNeutralCalibration, FaceObservation, GestureEvent, GestureGate, GestureGateConfig,
-    OneEuroConfig, TrackingLifecycle, TrackingLifecycleConfig, TrackingState, rotation_between,
-    web_shoot_score,
+    Handedness, OneEuroConfig, TrackingLifecycle, TrackingLifecycleConfig, TrackingState,
+    rotation_between, web_shoot_score,
 };
 use pocket_vrm::{SpringSolver, VrmDoc};
 use pocket3d::anim::NodeTrs;
@@ -99,6 +99,8 @@ pub struct Widget {
     clip_time: f32,
     clip_looping: bool,
     blink_binds: Vec<(usize, usize, f32)>, // (morph mesh slot, target, weight)
+    blink_left_binds: Vec<(usize, usize, f32)>,
+    blink_right_binds: Vec<(usize, usize, f32)>,
 
     scene: Scene,
     camera: Camera,
@@ -166,6 +168,8 @@ impl Widget {
             clip_time: 0.0,
             clip_looping: true,
             blink_binds: Vec::new(),
+            blink_left_binds: Vec::new(),
+            blink_right_binds: Vec::new(),
             scene: Scene::default(),
             camera: Camera::default(),
             hud: Hud::default(),
@@ -185,7 +189,11 @@ impl Widget {
             face_last_received: None,
             last_tracking_sequence: 0,
             body_filter: BodyPoseStabilizer::new(
-                OneEuroConfig::default(),
+                OneEuroConfig {
+                    min_cutoff: 0.9,
+                    beta: 0.06,
+                    derivative_cutoff: 1.0,
+                },
                 BodyStabilizerConfig::default(),
             ),
             tracked_body: None,
@@ -203,13 +211,13 @@ impl Widget {
             tracking_lifecycle: TrackingLifecycle::new(TrackingLifecycleConfig::default()),
             left_arm_lifecycle: TrackingLifecycle::new(TrackingLifecycleConfig {
                 acquire_frames: 3,
-                hold_ns: 750_000_000,
-                recover_ns: 1_000_000_000,
+                hold_ns: 2_000_000_000,
+                recover_ns: 1_200_000_000,
             }),
             right_arm_lifecycle: TrackingLifecycle::new(TrackingLifecycleConfig {
                 acquire_frames: 3,
-                hold_ns: 750_000_000,
-                recover_ns: 1_000_000_000,
+                hold_ns: 2_000_000_000,
+                recover_ns: 1_200_000_000,
             }),
             face_lifecycle: TrackingLifecycle::new(TrackingLifecycleConfig::default()),
             torso_observed: false,
@@ -240,7 +248,34 @@ impl Widget {
             self.last_tracking_sequence = frame.sequence;
             let received_at = Instant::now();
             self.tracking_last_received = Some(received_at);
-            self.tracked_body_space = frame.body_space;
+            let frame_has_body = frame.body.confident_joint_count(0.3) > 0;
+            if frame_has_body && frame.body_space != self.tracked_body_space {
+                log::info!(
+                    "body coordinate space changed: {:?} -> {:?}; resetting pose filters",
+                    self.tracked_body_space,
+                    frame.body_space
+                );
+                self.body_filter.reset();
+                self.tracked_body = None;
+                self.calibration_accumulator.reset();
+                self.calibration = None;
+                self.tracking_lifecycle.reset();
+                self.left_arm_lifecycle.reset();
+                self.right_arm_lifecycle.reset();
+                self.torso_observed = false;
+                self.left_arm_observed = false;
+                self.right_arm_observed = false;
+                self.torso_weight = 0.0;
+                self.left_arm_weight = 0.0;
+                self.right_arm_weight = 0.0;
+            }
+            // The Swift capture bridge intentionally emits an empty 2D body
+            // while MediaPipe owns pose estimation. A temporarily stale
+            // MediaPipe result must not make that empty carrier frame reset a
+            // live 3D filter back to image space.
+            if frame_has_body {
+                self.tracked_body_space = frame.body_space;
+            }
             if let Some(face) = frame.face {
                 let time = frame.captured_at_ns as f64 / 1_000_000_000.0;
                 if self.face_calibration.is_none()
@@ -252,21 +287,16 @@ impl Widget {
                         calibration.head_rotation_radians[1].to_degrees(),
                         calibration.samples,
                     );
-                    self.face_filter.reset();
                     self.face_calibration = Some(calibration);
                 }
-                let normalized = self.face_calibration.map_or(
-                    FaceObservation {
-                        head_rotation_radians: [0.0; 3],
-                        eye_blink: [0.0; 2],
-                        eye_look: [0.0; 2],
-                        mouth_open: 0.0,
-                        smile: 0.0,
-                        brow_raise: 0.0,
-                        confidence: face.confidence,
-                    },
-                    |calibration| calibration.normalize(face),
-                );
+                // MediaPipe blendshapes and the facial transform are already
+                // useful before neutral calibration completes. The previous
+                // all-zero fallback made every facial control look dead when
+                // the user started with a smile, open mouth, or turned head
+                // and therefore never satisfied the neutral gate.
+                let normalized = self
+                    .face_calibration
+                    .map_or(face, |calibration| calibration.normalize(face));
                 self.tracked_face = Some(self.face_filter.filter(time, normalized));
                 self.face_last_received = Some(received_at);
             }
@@ -367,9 +397,10 @@ impl Widget {
             for (index, hand) in frame.hands.iter().enumerate() {
                 if let Some(event) = self.gesture_gates[index].update(now_ns, web_shoot_score(hand))
                 {
+                    let avatar_hand = mirrored_handedness(hand.handedness);
                     self.pending_events.push(match event {
-                        GestureEvent::Started => TickEvent::WebShootStart(hand.handedness),
-                        GestureEvent::Ended => TickEvent::WebShootEnd(hand.handedness),
+                        GestureEvent::Started => TickEvent::WebShootStart(avatar_hand),
+                        GestureEvent::Ended => TickEvent::WebShootEnd(avatar_hand),
                     });
                 }
             }
@@ -485,16 +516,30 @@ fn apply_tracked_face_rotation(
     let Some(head) = vrm.humanoid_node("head") else {
         return;
     };
-    let [pitch, yaw, roll] = face.head_rotation_radians;
-    let pitch = pitch.clamp(-30f32.to_radians(), 30f32.to_radians());
-    let yaw = yaw.clamp(-60f32.to_radians(), 60f32.to_radians());
-    let roll = roll.clamp(-30f32.to_radians(), 30f32.to_radians());
-    // Vision observes the person facing the camera while VRM0 faces -Z, so
-    // yaw/roll change handedness at the camera-to-model boundary.
-    let delta = Quat::from_euler(EulerRot::YXZ, -yaw, pitch, -roll);
+    let delta = camera_face_to_avatar_rotation(face.head_rotation_radians);
     let weight = (tracking_weight * face.confidence).clamp(0.0, 1.0);
     locals[head].rotation =
         (locals[head].rotation * Quat::IDENTITY.slerp(delta, weight)).normalize();
+}
+
+/// Convert local face-tracker Euler angles into this VRM0 stage's bone space.
+///
+/// Yaw was verified to follow the person already. The imported VRM head bone
+/// uses the opposite local X direction from MediaPipe's facial transform, so
+/// pitch must change sign or looking up drives the avatar down. Roll follows
+/// the same camera-facing handedness conversion as yaw.
+fn camera_face_to_avatar_rotation([pitch, yaw, roll]: [f32; 3]) -> Quat {
+    let pitch = pitch.clamp(-30f32.to_radians(), 30f32.to_radians());
+    let yaw = yaw.clamp(-60f32.to_radians(), 60f32.to_radians());
+    let roll = roll.clamp(-30f32.to_radians(), 30f32.to_radians());
+    Quat::from_euler(EulerRot::YXZ, -yaw, -pitch, -roll)
+}
+
+fn mirrored_handedness(handedness: Handedness) -> Handedness {
+    match handedness {
+        Handedness::Left => Handedness::Right,
+        Handedness::Right => Handedness::Left,
+    }
 }
 
 fn apply_tracked_upper_body(
@@ -521,24 +566,10 @@ fn apply_tracked_upper_body(
             torso_weight,
         );
     }
-    if left_arm_weight > 0.0 {
-        apply_arm(
-            model,
-            vrm,
-            locals,
-            globals,
-            body,
-            body_space,
-            calibration.map(|value| [value.left_upper_arm_length, value.left_forearm_length]),
-            left_arm_weight,
-            [
-                BodyJoint::LeftShoulder,
-                BodyJoint::LeftElbow,
-                BodyJoint::LeftWrist,
-            ],
-            ["leftUpperArm", "leftLowerArm", "leftHand"],
-        );
-    }
+    // The front-facing camera reports anatomical left/right opposite to the
+    // avatar control expected by the mirrored live view. Swap the source arm
+    // chains once, here at the camera-to-avatar boundary; downstream bone
+    // solving stays in normal VRM humanoid space.
     if right_arm_weight > 0.0 {
         apply_arm(
             model,
@@ -554,7 +585,29 @@ fn apply_tracked_upper_body(
                 BodyJoint::RightElbow,
                 BodyJoint::RightWrist,
             ],
+            ["leftUpperArm", "leftLowerArm", "leftHand"],
+            AvatarArmSide::Left,
+            true,
+        );
+    }
+    if left_arm_weight > 0.0 {
+        apply_arm(
+            model,
+            vrm,
+            locals,
+            globals,
+            body,
+            body_space,
+            calibration.map(|value| [value.left_upper_arm_length, value.left_forearm_length]),
+            left_arm_weight,
+            [
+                BodyJoint::LeftShoulder,
+                BodyJoint::LeftElbow,
+                BodyJoint::LeftWrist,
+            ],
             ["rightUpperArm", "rightLowerArm", "rightHand"],
+            AvatarArmSide::Right,
+            true,
         );
     }
 }
@@ -718,6 +771,8 @@ fn apply_arm(
     weight: f32,
     joints: [BodyJoint; 3],
     bones: [&str; 3],
+    side: AvatarArmSide,
+    mirror_horizontal: bool,
 ) {
     if let Some(expected) = expected_lengths
         && (!segment_plausible(body, joints[0], joints[1], expected[0])
@@ -725,12 +780,17 @@ fn apply_arm(
     {
         return;
     }
-    let Some(upper_target) = tracked_direction(body, body_space, joints[0], joints[1]) else {
+    let Some(upper_target) =
+        tracked_arm_direction(body, body_space, joints[0], joints[1], mirror_horizontal)
+    else {
         return;
     };
-    let Some(lower_target) = tracked_direction(body, body_space, joints[1], joints[2]) else {
+    let Some(lower_target) =
+        tracked_arm_direction(body, body_space, joints[1], joints[2], mirror_horizontal)
+    else {
         return;
     };
+    let upper_target = constrain_upper_arm_target(upper_target, side);
     let (Some(upper), Some(lower), Some(hand)) = (
         vrm.humanoid_node(bones[0]),
         vrm.humanoid_node(bones[1]),
@@ -738,6 +798,28 @@ fn apply_arm(
     ) else {
         return;
     };
+
+    // High arm elevation should rotate the clavicle as well as the upper arm.
+    // Otherwise a loose sleeve is dragged through the neck by a single joint.
+    let shoulder_name = match side {
+        AvatarArmSide::Left => "leftShoulder",
+        AvatarArmSide::Right => "rightShoulder",
+    };
+    let shoulder_lift = ((upper_target.y - 0.15) / 0.7).clamp(0.0, 1.0);
+    if shoulder_lift > 0.0
+        && let Some(shoulder) = vrm.humanoid_node(shoulder_name)
+    {
+        apply_bone_direction(
+            model,
+            locals,
+            globals,
+            shoulder,
+            upper,
+            upper_target,
+            weight * shoulder_lift * 0.35,
+            25f32.to_radians(),
+        );
+    }
 
     apply_bone_direction(
         model,
@@ -759,6 +841,56 @@ fn apply_arm(
         weight,
         120f32.to_radians(),
     );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AvatarArmSide {
+    Left,
+    Right,
+}
+
+fn constrain_upper_arm_target(mut target: Vec3, side: AvatarArmSide) -> Vec3 {
+    // Allow modest adduction, but do not let a noisy monocular solve rotate an
+    // upper arm all the way through the neck or torso. When the intended pose
+    // is across the body, bend it toward the camera so it passes in front.
+    let inward = match side {
+        AvatarArmSide::Left => target.x.max(0.0),
+        AvatarArmSide::Right => (-target.x).max(0.0),
+    };
+    // Smoothstep is essential here: a hard inward threshold makes a
+    // continuous hand sweep jump abruptly from torso-plane to front-plane.
+    let blend = smoothstep01((inward - 0.05) / 0.8);
+    let capped_inward = match side {
+        AvatarArmSide::Left => 0.2,
+        AvatarArmSide::Right => -0.2,
+    };
+    target.x += (capped_inward - target.x) * blend;
+    let front_target = target.z.min(-0.8);
+    target.z += (front_target - target.z) * blend;
+    target.normalize_or_zero()
+}
+
+fn smoothstep01(value: f32) -> f32 {
+    let value = value.clamp(0.0, 1.0);
+    value * value * (3.0 - 2.0 * value)
+}
+
+fn tracked_arm_direction(
+    body: &BodyObservation,
+    body_space: BodyCoordinateSpace,
+    from: BodyJoint,
+    to: BodyJoint,
+    mirror_horizontal: bool,
+) -> Option<Vec3> {
+    let direction = tracked_direction(body, body_space, from, to)?;
+    // Swapping anatomical source chains is only half of a mirrored-camera
+    // mapping. Reflect their directions too; otherwise a source right arm
+    // applied to the avatar's left bones points inward through the torso.
+    Some(if mirror_horizontal {
+        Vec3::new(-direction.x, direction.y, direction.z)
+    } else {
+        direction
+    })
 }
 
 fn segment_plausible(
@@ -793,9 +925,10 @@ fn tracked_direction(
     // -Z-facing model from -Z, so screen-right maps to model -X.
     let model_delta = match body_space {
         BodyCoordinateSpace::ImageNormalized => Vec3::new(-delta.x, delta.y, delta.z),
-        // Vision camera coordinates look down -Z; Pocket's camera sits at -Z
-        // and looks toward +Z, so horizontal and depth axes both flip.
-        BodyCoordinateSpace::CameraRelativeMeters => Vec3::new(-delta.x, delta.y, -delta.z),
+        // Camera/world pose Z decreases toward the camera. Pocket's avatar
+        // also faces toward -Z, so depth retains its sign while X flips into
+        // the model's screen orientation.
+        BodyCoordinateSpace::CameraRelativeMeters => Vec3::new(-delta.x, delta.y, delta.z),
     };
     (model_delta.length_squared() > 1e-8).then_some(model_delta.normalize())
 }
@@ -939,17 +1072,35 @@ impl Game for Widget {
             &self.locals,
         ));
 
-        // Blink expression → morph slots.
+        // Blink expressions → morph slots. Prefer independent left/right
+        // presets when the model exposes both; fall back to the generic VRM0
+        // `blink` preset for simpler rigs.
         for expr in &vrm.expressions {
-            if expr.name == "blink" {
+            let target = if expr.name.eq_ignore_ascii_case("blink") {
+                Some(&mut self.blink_binds)
+            } else if ["blink_l", "blinkleft", "leftblink"]
+                .iter()
+                .any(|name| expr.name.eq_ignore_ascii_case(name))
+            {
+                Some(&mut self.blink_left_binds)
+            } else if ["blink_r", "blinkright", "rightblink"]
+                .iter()
+                .any(|name| expr.name.eq_ignore_ascii_case(name))
+            {
+                Some(&mut self.blink_right_binds)
+            } else {
+                None
+            };
+            if let Some(target) = target {
                 for b in &expr.binds {
                     if let Some(slot) = model.morph_mesh_slot(b.mesh) {
-                        self.blink_binds.push((slot, b.target, b.weight));
+                        target.push((slot, b.target, b.weight));
                     }
                 }
             }
         }
-        if self.blink_binds.is_empty() {
+        let split_blink = !self.blink_left_binds.is_empty() && !self.blink_right_binds.is_empty();
+        if self.blink_binds.is_empty() && !split_blink {
             log::warn!("model has no 'blink' expression; blinking disabled");
         }
 
@@ -999,9 +1150,26 @@ impl Game for Widget {
             .with_context(|| format!("reading bundle {}", self.cfg.bundle_path.display()))?;
         let clip_names: Vec<String> = self.clips.iter().map(|(n, _)| n.clone()).collect();
         let expr_names: Vec<String> = vrm.expressions.iter().map(|e| e.name.clone()).collect();
+        let model_name = vrm
+            .meta
+            .title
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                self.cfg
+                    .model_path
+                    .file_stem()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "character".into());
+        log::info!(
+            "model: name={model_name} expressions={} split_blink={split_blink}",
+            expr_names.join(",")
+        );
         self.guest = Some(CharacterGuest::boot(
             &bundle,
-            "AvatarSample_A",
+            &model_name,
             &clip_names,
             &expr_names,
         )?);
@@ -1162,10 +1330,12 @@ impl Game for Widget {
         // Generic VRM blink bindings usually close both eyes together. Using
         // the stronger eye prevents a real blink from being halved when the
         // face tracker sees one eyelid a frame earlier than the other.
-        let tracked_blink = self
+        let tracked_blinks = self
             .tracked_face
-            .map_or(out.blink, |face| face.eye_blink[0].max(face.eye_blink[1]));
-        let resolved_blink = out.blink * (1.0 - face_weight) + tracked_blink * face_weight;
+            .map_or([out.blink; 2], |face| face.eye_blink);
+        let resolved_blinks =
+            tracked_blinks.map(|tracked| out.blink * (1.0 - face_weight) + tracked * face_weight);
+        let resolved_blink = resolved_blinks[0].max(resolved_blinks[1]);
         if self.tracking.is_some() {
             let (mouth_open, smile, brow_raise) =
                 self.tracked_face.map_or((0.0, 0.0, 0.0), |face| {
@@ -1187,10 +1357,19 @@ impl Game for Widget {
         }
         let inst = &mut self.scene.models[0];
         inst.pose = Some(self.globals.clone());
-        if out.blink_changed || face_weight > 0.0 {
+        if out.blink_changed || self.tracking.is_some() {
             if let Some(morph) = inst.morph.as_mut() {
-                for &(slot, target, w) in &self.blink_binds {
-                    morph.set_weight(slot, target, resolved_blink * w);
+                if !self.blink_left_binds.is_empty() && !self.blink_right_binds.is_empty() {
+                    for &(slot, target, w) in &self.blink_left_binds {
+                        morph.set_weight(slot, target, resolved_blinks[0] * w);
+                    }
+                    for &(slot, target, w) in &self.blink_right_binds {
+                        morph.set_weight(slot, target, resolved_blinks[1] * w);
+                    }
+                } else {
+                    for &(slot, target, w) in &self.blink_binds {
+                        morph.set_weight(slot, target, resolved_blink * w);
+                    }
                 }
             }
         }
@@ -1402,5 +1581,128 @@ mod tracking_policy_tests {
             LEFT_ARM,
             true
         ));
+    }
+
+    #[test]
+    fn camera_pitch_changes_sign_but_yaw_does_not_change_policy() {
+        let input = [12f32.to_radians(), 20f32.to_radians(), 0.0];
+        let mapped = camera_face_to_avatar_rotation(input);
+        let (mapped_yaw, mapped_pitch, mapped_roll) = mapped.to_euler(EulerRot::YXZ);
+        assert!((mapped_yaw + input[1]).abs() < 1e-5);
+        assert!((mapped_pitch + input[0]).abs() < 1e-5);
+        assert!(mapped_roll.abs() < 1e-5);
+    }
+
+    #[test]
+    fn camera_hands_map_to_the_opposite_avatar_hands() {
+        assert_eq!(mirrored_handedness(Handedness::Left), Handedness::Right);
+        assert_eq!(mirrored_handedness(Handedness::Right), Handedness::Left);
+    }
+
+    #[test]
+    fn swapped_camera_arm_chains_also_mirror_their_directions() {
+        let mut body = BodyObservation::default();
+        for (joint, position) in [
+            (BodyJoint::LeftShoulder, [0.62, 0.7, 0.0]),
+            (BodyJoint::LeftElbow, [0.73, 0.6, 0.0]),
+            (BodyJoint::RightShoulder, [0.38, 0.7, 0.0]),
+            (BodyJoint::RightElbow, [0.27, 0.6, 0.0]),
+        ] {
+            body.set(
+                joint,
+                Some(TrackedPoint3 {
+                    position,
+                    confidence: 0.9,
+                }),
+            );
+        }
+
+        let avatar_left = tracked_arm_direction(
+            &body,
+            BodyCoordinateSpace::ImageNormalized,
+            BodyJoint::RightShoulder,
+            BodyJoint::RightElbow,
+            true,
+        )
+        .expect("right camera arm should drive avatar left arm");
+        let avatar_right = tracked_arm_direction(
+            &body,
+            BodyCoordinateSpace::ImageNormalized,
+            BodyJoint::LeftShoulder,
+            BodyJoint::LeftElbow,
+            true,
+        )
+        .expect("left camera arm should drive avatar right arm");
+
+        assert!(
+            avatar_left.x < 0.0,
+            "avatar left arm must point screen-left"
+        );
+        assert!(
+            avatar_right.x > 0.0,
+            "avatar right arm must point screen-right"
+        );
+    }
+
+    #[test]
+    fn camera_relative_depth_toward_camera_maps_to_avatar_forward() {
+        let mut body = BodyObservation::default();
+        for (joint, position) in [
+            (BodyJoint::LeftShoulder, [0.1, 0.5, -0.1]),
+            (BodyJoint::LeftElbow, [0.2, 0.4, -0.3]),
+        ] {
+            body.set(
+                joint,
+                Some(TrackedPoint3 {
+                    position,
+                    confidence: 0.9,
+                }),
+            );
+        }
+
+        let direction = tracked_arm_direction(
+            &body,
+            BodyCoordinateSpace::CameraRelativeMeters,
+            BodyJoint::LeftShoulder,
+            BodyJoint::LeftElbow,
+            true,
+        )
+        .expect("3D arm direction should be available");
+
+        assert!(direction.z < 0.0, "avatar forward is toward model -Z");
+    }
+
+    #[test]
+    fn deeply_cross_body_upper_arms_are_kept_in_front_of_the_torso() {
+        let left = constrain_upper_arm_target(Vec3::X, AvatarArmSide::Left);
+        let right = constrain_upper_arm_target(Vec3::NEG_X, AvatarArmSide::Right);
+
+        assert!(left.x <= 0.35 && left.z < -0.8);
+        assert!(right.x >= -0.35 && right.z < -0.8);
+    }
+
+    #[test]
+    fn outward_upper_arm_targets_are_not_changed() {
+        let left = Vec3::new(-0.8, 0.5, -0.1).normalize();
+        let right = Vec3::new(0.8, 0.5, -0.1).normalize();
+
+        assert!(constrain_upper_arm_target(left, AvatarArmSide::Left).abs_diff_eq(left, 1e-6));
+        assert!(constrain_upper_arm_target(right, AvatarArmSide::Right).abs_diff_eq(right, 1e-6));
+    }
+
+    #[test]
+    fn cross_body_constraint_is_continuous_during_a_sweep() {
+        let mut previous =
+            constrain_upper_arm_target(Vec3::new(-1.0, 0.6, 0.0).normalize(), AvatarArmSide::Left);
+        for step in 1..=100 {
+            let x = -1.0 + step as f32 * 0.02;
+            let current =
+                constrain_upper_arm_target(Vec3::new(x, 0.6, 0.0).normalize(), AvatarArmSide::Left);
+            assert!(
+                previous.angle_between(current) < 0.08,
+                "constraint jumped at x={x}: {previous:?} -> {current:?}"
+            );
+            previous = current;
+        }
     }
 }

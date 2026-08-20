@@ -38,6 +38,9 @@ fn main() -> Result<()> {
     let root = std::env::var("POCKET_CHARACTER_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    if let Some(model) = flag("--model-info") {
+        return print_model_info(PathBuf::from(model));
+    }
     let size = flag("--output-size")
         .as_deref()
         .map(parse_size)
@@ -162,6 +165,68 @@ fn main() -> Result<()> {
         },
         widget,
     )
+}
+
+fn print_model_info(path: PathBuf) -> Result<()> {
+    let vrm = pocket_vrm::VrmDoc::from_path(&path)?;
+    let required_bones = [
+        "hips",
+        "spine",
+        "neck",
+        "head",
+        "leftUpperArm",
+        "leftLowerArm",
+        "leftHand",
+        "rightUpperArm",
+        "rightLowerArm",
+        "rightHand",
+    ];
+    let missing_bones = required_bones
+        .iter()
+        .filter(|bone| vrm.humanoid_node(bone).is_none())
+        .copied()
+        .collect::<Vec<_>>();
+    let expressions = vrm
+        .expressions
+        .iter()
+        .map(|expression| expression.name.as_str())
+        .collect::<Vec<_>>();
+    let has_expression = |aliases: &[&str]| {
+        expressions.iter().any(|expression| {
+            aliases
+                .iter()
+                .any(|alias| expression.eq_ignore_ascii_case(alias))
+        })
+    };
+    let compatible = missing_bones.is_empty()
+        && (has_expression(&["blink"])
+            || (has_expression(&["blink_l", "blinkleft", "leftblink"])
+                && has_expression(&["blink_r", "blinkright", "rightblink"])))
+        && has_expression(&["a", "aa"]);
+    let report = serde_json::json!({
+        "schema_version": 1,
+        "path": path,
+        "format": "VRM 0.x",
+        "name": vrm.meta.title,
+        "author": vrm.meta.author,
+        "license": vrm.meta.license_name,
+        "humanoid_bones": vrm.humanoid.len(),
+        "missing_required_bones": missing_bones,
+        "expressions": expressions,
+        "controls": {
+            "blink": has_expression(&["blink"]),
+            "split_blink": has_expression(&["blink_l", "blinkleft", "leftblink"])
+                && has_expression(&["blink_r", "blinkright", "rightblink"]),
+            "mouth": has_expression(&["a", "aa"]),
+            "smile": has_expression(&["joy", "happy", "fun"]),
+            "brow": has_expression(&["surprised", "surprise"]),
+            "eye_bones": vrm.humanoid_node("leftEye").is_some()
+                && vrm.humanoid_node("rightEye").is_some(),
+        },
+        "compatible": compatible,
+    });
+    println!("MODEL_INFO {report}");
+    Ok(())
 }
 
 fn parse_size(value: &str) -> Result<(u32, u32)> {

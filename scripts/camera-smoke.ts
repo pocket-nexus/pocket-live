@@ -74,7 +74,7 @@ if (result.face_backend_samples < 1) {
   throw new Error("MediaPipe face backend did not consume shared camera frames");
 }
 if (result.pose_backend_detected < 1) {
-  throw new Error("MediaPipe pose backend did not detect a body");
+  throw new Error("native Vision pose backend did not detect a body");
 }
 if (result.face_frames < 1) {
   console.warn("WARN  no face was visible during this smoke run; schema-v3 face controls are covered by the mock diagnostic");

@@ -7,11 +7,12 @@
 
 ## Pocket Live quick start
 
-Pocket Live is fully local. AVFoundation captures the camera, Apple Vision
-produces the person matte, and pinned MediaPipe Face/Pose/Hand Landmarkers read
-the same shared frame to produce semantic blendshapes, 33 body landmarks and
-21 landmarks per hand. Camera frames are not sent to QuickJS, written to disk,
-or sent to a network service; no LLM is used.
+Pocket Live is fully local. AVFoundation captures the camera; native Apple
+Vision produces the person matte, body pose and hands; pinned MediaPipe Face
+Landmarker reads the same shared frame for semantic facial blendshapes. One
+body/hand source owns shoulder, elbow and wrist positions, so competing
+detectors cannot make the arm jump. Camera frames are not sent to QuickJS,
+written to disk, or sent to a network service; no LLM is used.
 
 ```sh
 # Fetch pinned VRM/MediaPipe assets and install JS/Python dependencies.
@@ -30,6 +31,9 @@ bun run live:diagnose --camera
 # Start the local camera-driven Pocket window.
 bun run live
 
+# Use an original/licensed VRM 0.x model instead of the development sample.
+bun run live -- --model /absolute/path/to/hero.vrm
+
 # Verify full 1920x1080 render/compositor throughput on the local GPU.
 bun run live:benchmark
 
@@ -43,10 +47,17 @@ output. `--background split` remains available as an explicit alternate mode.
 OBS configuration and background-mode choices are documented in
 [docs/OBS_SETUP.md](docs/OBS_SETUP.md).
 
+Voice conversion was evaluated and rejected from the product because the
+available target models did not meet the required Chinese speech quality. The
+implementation has been removed; measurements, failed approaches and future
+acceptance criteria are preserved in
+[docs/VOICE_RESEARCH.md](docs/VOICE_RESEARCH.md).
+
 Useful direct host flags:
 
 ```sh
 target/release/pocket-character --tracking off
+target/release/pocket-character --model-info /absolute/path/to/model.vrm
 target/release/pocket-character --tracking mock
 target/release/pocket-character --tracking camera --device CAMERA_UNIQUE_ID
 target/release/pocket-character --tracking camera --output-size 1920x1080 --background split
@@ -54,8 +65,13 @@ target/release/pocket-character --tracking camera --output-size 1920x1080 --back
 target/release/pocket-character --tracking camera --output-size 1920x1080 --background clean --clean-plate-delay 5
 ```
 
-The sample VRM is for development verification. Replace it with an original,
-properly licensed spider-themed VRM before commercial use.
+The bundled `AvatarSample_A` is visibly a development fixture, not the final
+character. Replace it with an original, properly licensed spider-themed VRM
+0.x before visual review or commercial use. `--model-info` reports missing
+humanoid bones and whether blink, mouth, smile, brow and eye controls are
+actually present; a good-looking mesh without those controls will still track
+poorly. Use `--vrma /absolute/path/to/idle.vrma` to override the idle
+animation.
 
 A 3D digital-human desktop widget on the Pocket runtime family — the
 [airi](https://github.com/moeru-ai/airi) VRM stage, reimplemented as **one
@@ -93,8 +109,8 @@ measurement section below for the answer.
 | `crates/pocket-character` | macOS widget host (winit + wgpu via `pocket3d`) |
 | `crates/pocket-character-core` | portable behavior sim (blink/saccade/look-at) |
 | `crates/pocket-live-core` | tracking contract, calibration, filtering and gesture FSM |
-| `native/PocketVisionBridge` | AVFoundation capture, shared frames and Apple person matte |
-| `native/mediapipe_face_bridge.py` | pinned local face, pose and hand inference |
+| `native/PocketVisionBridge` | AVFoundation capture, Apple body/hands/person matte and shared frames |
+| `native/mediapipe_face_bridge.py` | pinned local semantic face inference |
 | `app/` | guest bundle: `character` surface SDK + policy |
 | `scripts/` | Bun TS: asset fetch, bundle build, run, measurement |
 | `vendor/pocketjs` | the engine, pinned as a submodule |

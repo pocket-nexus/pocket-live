@@ -30,6 +30,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--pose-model", type=Path, required=True)
     parser.add_argument("--hand-model", type=Path, required=True)
+    parser.add_argument(
+        "--face-only",
+        action="store_true",
+        help="run only Face Landmarker; keep body and hands on the native Vision path",
+    )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--camera-index", type=int)
     source.add_argument("--frame-share-name")
@@ -55,6 +60,8 @@ class SharedFrameSource:
         finally:
             os.close(fd)
         self.last_sequence = 0
+        self.debug_frame_path = os.environ.get("POCKET_TRACKING_DEBUG_FRAME")
+        self.debug_frame_written = False
 
     def read(self) -> tuple[int, object] | None:
         sequence = struct.unpack_from("<Q", self.mapping, 16)[0]
@@ -90,6 +97,23 @@ class SharedFrameSource:
             return None
         self.last_sequence = sequence
         bgra = np.frombuffer(raw, dtype="uint8").reshape((height, width, 4)).copy()
+        if self.debug_frame_path and not self.debug_frame_written:
+            path = Path(self.debug_frame_path).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            written = cv2.imwrite(str(path), bgra)
+            means = np.mean(bgra[:, :, :3], axis=(0, 1))
+            deviations = np.std(bgra[:, :, :3], axis=(0, 1))
+            print(
+                "shared_frame_debug: "
+                f"size={width}x{height} "
+                f"bgr_mean={means.round(1).tolist()} "
+                f"bgr_std={deviations.round(1).tolist()} "
+                f"range={int(bgra[:, :, :3].min())}..{int(bgra[:, :, :3].max())} "
+                f"saved={written} path={path}",
+                file=sys.stderr,
+                flush=True,
+            )
+            self.debug_frame_written = True
         inference = cv2.resize(bgra, (640, 360), interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(inference, cv2.COLOR_BGRA2RGB)
         return captured_at_ns, mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
@@ -185,6 +209,28 @@ def tracked_point(landmark: object, confidence: float | None = None) -> dict[str
     }
 
 
+def world_tracked_point(
+    world_landmark: object,
+    image_landmark: object,
+    confidence: float | None = None,
+) -> dict[str, object]:
+    return {
+        # MediaPipe world Y grows downward while Pocket/VRM Y grows upward.
+        # X and Z retain camera-relative direction; negative Z is toward the
+        # camera, which is also the avatar's forward direction.
+        "position": [
+            float(world_landmark.x),
+            -float(world_landmark.y),
+            float(world_landmark.z),
+        ],
+        "confidence": clamp01(
+            landmark_confidence(image_landmark)
+            if confidence is None
+            else confidence
+        ),
+    }
+
+
 def midpoint(left: object, right: object) -> dict[str, object]:
     return {
         "position": [
@@ -193,6 +239,25 @@ def midpoint(left: object, right: object) -> dict[str, object]:
             0.0,
         ],
         "confidence": min(landmark_confidence(left), landmark_confidence(right)),
+    }
+
+
+def midpoint_world(
+    left_world: object,
+    right_world: object,
+    left_image: object,
+    right_image: object,
+) -> dict[str, object]:
+    return {
+        "position": [
+            (float(left_world.x) + float(right_world.x)) * 0.5,
+            -(float(left_world.y) + float(right_world.y)) * 0.5,
+            (float(left_world.z) + float(right_world.z)) * 0.5,
+        ],
+        "confidence": min(
+            landmark_confidence(left_image),
+            landmark_confidence(right_image),
+        ),
     }
 
 
@@ -206,27 +271,64 @@ def midpoint_points(left: dict[str, object], right: dict[str, object]) -> dict[s
     }
 
 
-def body_observation(result: object) -> dict[str, object] | None:
+def body_observation(
+    result: object,
+) -> tuple[dict[str, object] | None, str | None]:
     if not result.pose_landmarks:
-        return None
+        return None, None
     landmarks = result.pose_landmarks[0]
+    world_landmarks = (
+        result.pose_world_landmarks[0]
+        if result.pose_world_landmarks
+        else None
+    )
     joints: list[dict[str, object] | None] = [None] * 16
     # Pocket BodyJoint order. Pose Landmarker indexes are the public 33-point
     # BlazePose contract.
-    root = midpoint(landmarks[23], landmarks[24])
-    neck = midpoint(landmarks[11], landmarks[12])
+    if world_landmarks is not None:
+        root = midpoint_world(
+            world_landmarks[23],
+            world_landmarks[24],
+            landmarks[23],
+            landmarks[24],
+        )
+        neck = midpoint_world(
+            world_landmarks[11],
+            world_landmarks[12],
+            landmarks[11],
+            landmarks[12],
+        )
+    else:
+        root = midpoint(landmarks[23], landmarks[24])
+        neck = midpoint(landmarks[11], landmarks[12])
     joints[0] = root
     joints[1] = midpoint_points(root, neck)
     joints[2] = neck
-    joints[3] = tracked_point(landmarks[0])
+    joints[3] = (
+        world_tracked_point(world_landmarks[0], landmarks[0])
+        if world_landmarks is not None
+        else tracked_point(landmarks[0])
+    )
     for pocket_index, pose_index in (
         (4, 11), (5, 13), (6, 15),
         (7, 12), (8, 14), (9, 16),
         (10, 23), (11, 25), (12, 27),
         (13, 24), (14, 26), (15, 28),
     ):
-        joints[pocket_index] = tracked_point(landmarks[pose_index])
-    return {"joints": joints}
+        joints[pocket_index] = (
+            world_tracked_point(
+                world_landmarks[pose_index],
+                landmarks[pose_index],
+            )
+            if world_landmarks is not None
+            else tracked_point(landmarks[pose_index])
+        )
+    body_space = (
+        "CameraRelativeMeters"
+        if world_landmarks is not None
+        else "ImageNormalized"
+    )
+    return {"joints": joints}, body_space
 
 
 def hand_category(entry: object) -> tuple[str | None, float]:
@@ -277,7 +379,9 @@ def hand_observations(
 
 
 def supplement_body_wrists(
-    body: dict[str, object] | None, hands: list[dict[str, object]]
+    body: dict[str, object] | None,
+    hands: list[dict[str, object]],
+    replace_positions: bool = True,
 ) -> dict[str, object] | None:
     if body is None:
         return None
@@ -288,11 +392,21 @@ def supplement_body_wrists(
     ):
         wrist = hands[hand_index]["points"][0]
         current = joints[wrist_index]
-        if wrist is not None and (
-            current is None
-            or float(wrist["confidence"]) > float(current["confidence"])
-        ):
-            joints[wrist_index] = wrist
+        if wrist is not None:
+            if replace_positions and (
+                current is None
+                or float(wrist["confidence"]) > float(current["confidence"])
+            ):
+                joints[wrist_index] = wrist
+            elif current is not None:
+                # Hand Landmarker has stronger evidence under forearm
+                # occlusion, but its coordinates are image-normalized. For a
+                # 3D body retain the world-space wrist position and borrow only
+                # the confidence so the arm does not drop to idle.
+                current["confidence"] = max(
+                    float(current["confidence"]),
+                    float(wrist["confidence"]),
+                )
         # BlazePose still predicts a useful elbow position when a forearm is
         # partly occluded, but its visibility score can collapse. A separately
         # detected hand supplies strong endpoint evidence, so retain that elbow
@@ -314,11 +428,12 @@ def supplement_body_wrists(
 
 def main() -> int:
     args = parse_args()
-    for label, path in (
-        ("face", args.model),
-        ("pose", args.pose_model),
-        ("hand", args.hand_model),
-    ):
+    required_models = [("face", args.model)]
+    if not args.face_only:
+        required_models.extend(
+            [("pose", args.pose_model), ("hand", args.hand_model)]
+        )
+    for label, path in required_models:
         if not path.is_file():
             print(f"{label} model not found: {path}", file=sys.stderr)
             return 2
@@ -349,29 +464,32 @@ def main() -> int:
         output_face_blendshapes=True,
         output_facial_transformation_matrixes=True,
     )
-    pose_options = mp.tasks.vision.PoseLandmarkerOptions(
-        base_options=mp.tasks.BaseOptions(
-            model_asset_path=str(args.pose_model),
-            delegate=mp.tasks.BaseOptions.Delegate.CPU,
-        ),
-        running_mode=mp.tasks.vision.RunningMode.VIDEO,
-        num_poses=1,
-        min_pose_detection_confidence=0.45,
-        min_pose_presence_confidence=0.45,
-        min_tracking_confidence=0.5,
-        output_segmentation_masks=False,
-    )
-    hand_options = mp.tasks.vision.HandLandmarkerOptions(
-        base_options=mp.tasks.BaseOptions(
-            model_asset_path=str(args.hand_model),
-            delegate=mp.tasks.BaseOptions.Delegate.CPU,
-        ),
-        running_mode=mp.tasks.vision.RunningMode.VIDEO,
-        num_hands=2,
-        min_hand_detection_confidence=0.4,
-        min_hand_presence_confidence=0.4,
-        min_tracking_confidence=0.5,
-    )
+    pose_options = None
+    hand_options = None
+    if not args.face_only:
+        pose_options = mp.tasks.vision.PoseLandmarkerOptions(
+            base_options=mp.tasks.BaseOptions(
+                model_asset_path=str(args.pose_model),
+                delegate=mp.tasks.BaseOptions.Delegate.CPU,
+            ),
+            running_mode=mp.tasks.vision.RunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.45,
+            min_pose_presence_confidence=0.45,
+            min_tracking_confidence=0.5,
+            output_segmentation_masks=False,
+        )
+        hand_options = mp.tasks.vision.HandLandmarkerOptions(
+            base_options=mp.tasks.BaseOptions(
+                model_asset_path=str(args.hand_model),
+                delegate=mp.tasks.BaseOptions.Delegate.CPU,
+            ),
+            running_mode=mp.tasks.vision.RunningMode.VIDEO,
+            num_hands=2,
+            min_hand_detection_confidence=0.4,
+            min_hand_presence_confidence=0.4,
+            min_tracking_confidence=0.5,
+        )
     interval = 1.0 / max(1.0, args.fps)
     emitted = 0
     started = time.monotonic()
@@ -381,11 +499,19 @@ def main() -> int:
             face_landmarker = stack.enter_context(
                 mp.tasks.vision.FaceLandmarker.create_from_options(face_options)
             )
-            pose_landmarker = stack.enter_context(
-                mp.tasks.vision.PoseLandmarker.create_from_options(pose_options)
+            pose_landmarker = (
+                stack.enter_context(
+                    mp.tasks.vision.PoseLandmarker.create_from_options(pose_options)
+                )
+                if pose_options is not None
+                else None
             )
-            hand_landmarker = stack.enter_context(
-                mp.tasks.vision.HandLandmarker.create_from_options(hand_options)
+            hand_landmarker = (
+                stack.enter_context(
+                    mp.tasks.vision.HandLandmarker.create_from_options(hand_options)
+                )
+                if hand_options is not None
+                else None
             )
             while args.max_frames is None or emitted < args.max_frames:
                 now = time.monotonic()
@@ -408,14 +534,25 @@ def main() -> int:
                     image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                 timestamp_ms = int((now - started) * 1000)
                 face_result = face_landmarker.detect_for_video(image, timestamp_ms)
-                pose_result = pose_landmarker.detect_for_video(image, timestamp_ms)
-                hand_result = hand_landmarker.detect_for_video(image, timestamp_ms)
-                hands = hand_observations(hand_result, pose_result)
-                body = supplement_body_wrists(body_observation(pose_result), hands)
+                if pose_landmarker is not None and hand_landmarker is not None:
+                    pose_result = pose_landmarker.detect_for_video(image, timestamp_ms)
+                    hand_result = hand_landmarker.detect_for_video(image, timestamp_ms)
+                    hands = hand_observations(hand_result, pose_result)
+                    body, body_space = body_observation(pose_result)
+                    body = supplement_body_wrists(
+                        body,
+                        hands,
+                        replace_positions=body_space == "ImageNormalized",
+                    )
+                else:
+                    hands = None
+                    body = None
+                    body_space = None
                 payload = {
                     "captured_at_ns": captured_at_ns,
                     "face": face_observation(face_result),
                     "body": body,
+                    "body_space": body_space,
                     "hands": hands,
                 }
                 print(json.dumps(payload, separators=(",", ":")), flush=True)

@@ -86,12 +86,12 @@ impl FaceNeutralCalibration {
                 face.head_rotation_radians[axis] - self.head_rotation_radians[axis]
             }),
             eye_blink: core::array::from_fn(|eye| {
-                gain(face.eye_blink[eye], self.eye_blink[eye] + 0.03, 0.55)
+                gain(face.eye_blink[eye], self.eye_blink[eye] + 0.03, 0.45)
             }),
             eye_look: face.eye_look,
-            mouth_open: gain(face.mouth_open, self.mouth_open + 0.02, 0.7),
-            smile: gain(face.smile, self.smile + 0.04, 0.8),
-            brow_raise: gain(face.brow_raise, self.brow_raise + 0.03, 0.7),
+            mouth_open: gain(face.mouth_open, self.mouth_open + 0.02, 0.5),
+            smile: gain(face.smile, self.smile + 0.04, 0.55),
+            brow_raise: gain(face.brow_raise, self.brow_raise + 0.03, 0.5),
             confidence: face.confidence,
         }
     }
@@ -104,8 +104,33 @@ pub struct FaceControlFilter {
 
 impl FaceControlFilter {
     pub fn new(config: OneEuroConfig) -> Self {
+        let responsive = OneEuroConfig {
+            min_cutoff: config.min_cutoff.max(6.0),
+            beta: config.beta.max(0.3),
+            derivative_cutoff: config.derivative_cutoff.max(1.5),
+        };
+        let expressive = OneEuroConfig {
+            min_cutoff: config.min_cutoff.max(3.5),
+            beta: config.beta.max(0.2),
+            derivative_cutoff: config.derivative_cutoff.max(1.25),
+        };
         Self {
-            values: [OneEuroScalar::new(config); 10],
+            // Head (3) stays stable; blinks (2) need to survive a 100–150 ms
+            // event; gaze (2) and mouth/smile/brow (3) sit between those
+            // extremes. One cutoff for all ten controls made blinks feel dead
+            // while still allowing slow body drift.
+            values: [
+                OneEuroScalar::new(config),
+                OneEuroScalar::new(config),
+                OneEuroScalar::new(config),
+                OneEuroScalar::new(responsive),
+                OneEuroScalar::new(responsive),
+                OneEuroScalar::new(expressive),
+                OneEuroScalar::new(expressive),
+                OneEuroScalar::new(responsive),
+                OneEuroScalar::new(expressive),
+                OneEuroScalar::new(expressive),
+            ],
         }
     }
 
@@ -191,5 +216,22 @@ mod tests {
         smiling.smile = 0.9;
         assert!(accumulator.push(smiling).is_none());
         assert_eq!(accumulator.progress(), 0.0);
+    }
+
+    #[test]
+    fn blink_filter_responds_faster_than_head_filter() {
+        let mut filter = FaceControlFilter::new(OneEuroConfig {
+            min_cutoff: 1.8,
+            beta: 0.12,
+            derivative_cutoff: 1.0,
+        });
+        let base = neutral();
+        filter.filter(0.0, base);
+        let mut changed = base;
+        changed.head_rotation_radians[0] = 1.0;
+        changed.eye_blink[0] = 1.0;
+        let output = filter.filter(1.0 / 15.0, changed);
+        assert!(output.eye_blink[0] > output.head_rotation_radians[0]);
+        assert!(output.eye_blink[0] > 0.7, "blink={}", output.eye_blink[0]);
     }
 }

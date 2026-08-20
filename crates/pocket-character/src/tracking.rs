@@ -98,6 +98,7 @@ struct Shared {
     face_backend_detected: AtomicU64,
     pose_backend_detected: AtomicU64,
     hand_backend_detected: AtomicU64,
+    last_body_controls_merged_ns: AtomicU64,
     rejected: AtomicU64,
     video_accepted: AtomicU64,
     video_with_mask: AtomicU64,
@@ -107,18 +108,20 @@ struct Shared {
 
 #[derive(Clone, Debug)]
 struct TimedControls {
+    captured_at_ns: u64,
     face: Option<FaceObservation>,
     body: Option<BodyObservation>,
+    body_space: Option<BodyCoordinateSpace>,
     hands: Option<[HandObservation; 2]>,
     received_at: Instant,
 }
 
 #[derive(Deserialize)]
 struct MediaPipeEnvelope {
-    #[allow(dead_code)]
     captured_at_ns: u64,
     face: Option<FaceObservation>,
     body: Option<BodyObservation>,
+    body_space: Option<BodyCoordinateSpace>,
     hands: Option<[HandObservation; 2]>,
 }
 
@@ -327,26 +330,14 @@ fn read_faces(stdout: impl std::io::Read, shared: &Shared) {
                 if face.is_some() {
                     shared.face_backend_detected.fetch_add(1, Ordering::Relaxed);
                 }
-                if envelope
-                    .body
-                    .as_ref()
-                    .is_some_and(|body| body.confident_joint_count(0.3) >= 6)
-                {
-                    shared.pose_backend_detected.fetch_add(1, Ordering::Relaxed);
-                }
-                if envelope
-                    .hands
-                    .as_ref()
-                    .is_some_and(|hands| hands.iter().any(|hand| hand.confidence >= 0.3))
-                {
-                    shared.hand_backend_detected.fetch_add(1, Ordering::Relaxed);
-                }
                 *shared
                     .latest_controls
                     .lock()
                     .expect("tracking controls mutex poisoned") = Some(TimedControls {
+                    captured_at_ns: envelope.captured_at_ns,
                     face,
                     body: envelope.body,
+                    body_space: envelope.body_space,
                     hands: envelope.hands,
                     received_at: Instant::now(),
                 });
@@ -422,13 +413,26 @@ fn accept_line(bytes: &[u8], shared: &Shared) -> Option<u64> {
         if let Some(face) = controls.face {
             frame.face = Some(face);
         }
-        if let Some(body) = controls.body {
-            frame.body_space = BodyCoordinateSpace::ImageNormalized;
+        let body_is_new =
+            controls.captured_at_ns > shared.last_body_controls_merged_ns.load(Ordering::Relaxed);
+        if body_is_new && let Some(body) = controls.body {
+            shared
+                .last_body_controls_merged_ns
+                .store(controls.captured_at_ns, Ordering::Relaxed);
+            frame.body_space = controls
+                .body_space
+                .unwrap_or(BodyCoordinateSpace::ImageNormalized);
             frame.body = body;
         }
         if let Some(hands) = controls.hands {
             frame.hands = hands;
         }
+    }
+    if frame.body.confident_joint_count(0.3) >= 6 {
+        shared.pose_backend_detected.fetch_add(1, Ordering::Relaxed);
+    }
+    if frame.hands.iter().any(|hand| hand.confidence >= 0.3) {
+        shared.hand_backend_detected.fetch_add(1, Ordering::Relaxed);
     }
     if let Err(error) = frame.validate() {
         shared.rejected.fetch_add(1, Ordering::Relaxed);
@@ -474,6 +478,7 @@ fn accept_line(bytes: &[u8], shared: &Shared) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pocket_live_core::{BodyJoint, TrackedPoint3};
 
     const MOCK: &[u8] = br#"{"body":{"joints":[null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null]},"body_space":"ImageNormalized","captured_at_ns":1000000000,"face":{"brow_raise":0.1,"confidence":0.9,"eye_blink":[0.2,0.3],"eye_look":[0.1,-0.1],"head_rotation_radians":[0.0,0.0,0.0],"mouth_open":0.2,"smile":0.1},"hands":[{"confidence":0,"handedness":"Left","points":[null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null]},{"confidence":0,"handedness":"Right","points":[null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null]}],"image_size":[1920,1080],"schema_version":3,"sequence":1}"#;
 
@@ -493,5 +498,57 @@ mod tests {
         accept_line(b"not json", &shared);
         assert_eq!(shared.accepted.load(Ordering::Relaxed), 0);
         assert_eq!(shared.rejected.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn each_mediapipe_body_sample_is_merged_only_once() {
+        let shared = Shared::default();
+        let mut body = BodyObservation::default();
+        body.set(
+            BodyJoint::Root,
+            Some(TrackedPoint3 {
+                position: [0.0, 1.0, 0.0],
+                confidence: 0.9,
+            }),
+        );
+        *shared.latest_controls.lock().unwrap() = Some(TimedControls {
+            captured_at_ns: 2_000_000_000,
+            face: None,
+            body: Some(body),
+            body_space: Some(BodyCoordinateSpace::CameraRelativeMeters),
+            hands: None,
+            received_at: Instant::now(),
+        });
+
+        let mut first: TrackingFrame = serde_json::from_slice(MOCK).unwrap();
+        first.face = None;
+        accept_line(&serde_json::to_vec(&first).unwrap(), &shared);
+        assert_eq!(
+            shared
+                .latest
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .body
+                .confident_joint_count(0.3),
+            1
+        );
+
+        let mut second = first;
+        second.sequence = 2;
+        second.captured_at_ns += 33_000_000;
+        accept_line(&serde_json::to_vec(&second).unwrap(), &shared);
+        assert_eq!(
+            shared
+                .latest
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .body
+                .confident_joint_count(0.3),
+            0
+        );
     }
 }

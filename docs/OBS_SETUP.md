@@ -10,6 +10,15 @@ bun run live:build
 bun run live
 ```
 
+正式角色不要使用仓库的 VRoid 测试样例。先检查自有 VRM 0.x 是否具备骨骼和表情：
+
+```sh
+target/release/pocket-character --model-info /absolute/path/to/hero.vrm
+bun run live -- --model /absolute/path/to/hero.vrm
+```
+
+报告里的 `compatible` 应为 `true`；至少要有头、颈、脊柱、双臂骨骼，以及眨眼和口型。
+
 `bun run live` 的默认等价参数是：
 
 ```sh
@@ -37,7 +46,7 @@ target/release/pocket-character \
 1. 在 OBS 的“视频”设置中把基础画布与输出分辨率都设为 `1920x1080`，帧率设为 `60`。
 2. 添加 macOS“窗口采集”源，选择标题为 `pocket-character` 的窗口。
 3. 让该源铺满画布；不要添加色键或人像抠像滤镜，因为 Pocket 已输出最终画面。
-4. 麦克风与桌面音频继续作为独立 OBS 音源添加。Pocket Live 不处理、上传或录制音频。
+4. 声音直接由 OBS 的独立麦克风输入管理；Pocket Live 不包含变声功能。
 5. 在直播输出中选择 Apple VideoToolbox 的 H.264 硬件编码器；关键帧间隔使用平台通常要求的 2 秒，码率按直播平台要求填写。
 
 第一次窗口采集时，macOS 可能要求给 OBS“屏幕与系统音频录制”权限。授权后需要重启
