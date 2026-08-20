@@ -18,6 +18,7 @@ bun run live -- --model /absolute/path/to/hero.vrm
 ```
 
 报告里的 `compatible` 应为 `true`；至少要有头、颈、脊柱、双臂骨骼，以及眨眼和口型。
+正式配置应把模型、动画和策略放入人物插件；格式见 [PLUGINS.md](PLUGINS.md)。
 
 `bun run live` 的默认等价参数是：
 
@@ -25,9 +26,12 @@ bun run live -- --model /absolute/path/to/hero.vrm
 target/release/pocket-character \
   --tracking camera \
   --output-size 1920x1080 \
-  --background virtual \
   --max-fps 60
 ```
+
+`virtual` 现在来自默认背景插件的 `default_mode`，不再写死在启动脚本里。可以使用
+`--background-plugin /absolute/path/to/plugin.json` 独立更换背景主题；`--background`
+仅临时覆盖插件的默认合成模式。
 
 可选背景模式：
 

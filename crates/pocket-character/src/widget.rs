@@ -32,12 +32,14 @@ use pocket3d::scene::Scene;
 
 use crate::compositor::{BackgroundMode, CompositorConfig, VideoCompositor};
 use crate::guest::{CharacterGuest, Command, TickEvent, TickState};
+use crate::plugins::CharacterRenderConfig;
 use crate::tracking::{TrackingClient, VisionLaunch};
 
 pub struct WidgetConfig {
     pub model_path: PathBuf,
     pub vrma_path: PathBuf,
     pub bundle_path: PathBuf,
+    pub render: CharacterRenderConfig,
     pub size: (u32, u32),
     /// Render N frames then exit (verification runs).
     pub frames: Option<u32>,
@@ -1036,15 +1038,15 @@ fn tracking_state_name(state: TrackingState) -> &'static str {
 impl Game for Widget {
     fn init(&mut self, gpu: &Gpu, renderer: &mut Renderer) -> Result<()> {
         let t0 = Instant::now();
-        // 2048 halves the 4096² authoring textures: invisible at 450×600,
-        // and GPU texture memory is the widget's dominant footprint.
+        // Texture budget belongs to the character plugin because authoring
+        // resolution and the intended framing are properties of that asset.
         let model = ModelAsset::load_glb_opts(
             gpu,
             &renderer.model_material_layout,
             &renderer.samplers,
             &self.cfg.model_path,
             &ModelLoadOptions {
-                max_texture_dim: Some(2048),
+                max_texture_dim: Some(self.cfg.render.max_texture_dimension),
             },
         )
         .context("loading VRM model")?;
@@ -1112,7 +1114,7 @@ impl Game for Widget {
         inst.lit = 0.25;
         self.scene.transparent_clear = true;
         self.scene.models.push(inst);
-        if let Some(config) = self.cfg.compositor {
+        if let Some(config) = self.cfg.compositor.clone() {
             self.compositor = Some(VideoCompositor::new(gpu, renderer.color_format, config));
         }
 
@@ -1123,14 +1125,23 @@ impl Game for Widget {
         // of its 450×600 stage) rather than the AABB midpoint.
         let aabb = model.aabb;
         let height = aabb.1.y - aabb.0.y;
-        self.anchor = Vec3::new(0.0, aabb.0.y + height * 0.72, 0.0);
-        self.camera.fov_y = 40f32.to_radians();
+        self.anchor = Vec3::new(
+            0.0,
+            aabb.0.y + height * self.cfg.render.anchor_height_ratio,
+            0.0,
+        );
+        self.camera.fov_y = self.cfg.render.fov_y_degrees.to_radians();
         self.camera.znear = 0.05;
         let split_screen = self
             .cfg
             .compositor
+            .as_ref()
             .is_some_and(|config| config.mode == BackgroundMode::Split);
-        let camera_distance = if split_screen { 1.35 } else { 1.0 };
+        let camera_distance = if split_screen {
+            self.cfg.render.split_camera_distance
+        } else {
+            self.cfg.render.camera_distance
+        };
         self.camera.pos = self.anchor + Vec3::new(0.0, 0.0, -camera_distance);
         self.camera.look_at(self.anchor);
         if split_screen {

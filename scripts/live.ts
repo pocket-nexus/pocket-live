@@ -17,8 +17,6 @@ const proc = Bun.spawn(
     "camera",
     "--output-size",
     "1920x1080",
-    "--background",
-    "virtual",
     ...forwarded,
   ],
   {

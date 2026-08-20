@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "kind": "character",
+  "id": "pocket-live.default-character",
+  "name": "Pocket Live Default Character",
+  "model": "../../../assets/AvatarSample_A.vrm",
+  "idle_animation": "../../../assets/idle_loop.vrma",
+  "policy": {
+    "entry": "main.ts",
+    "bundle": "dist/character.js"
+  },
+  "render": {
+    "max_texture_dimension": 2048,
+    "fov_y_degrees": 40,
+    "anchor_height_ratio": 0.72,
+    "camera_distance": 1,
+    "split_camera_distance": 1.35
+  }
+}

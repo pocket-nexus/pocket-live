@@ -35,10 +35,16 @@ async function pngSize(path: string): Promise<[number, number]> {
 
 requireFile(join(root, "assets/AvatarSample_A.vrm"), 1_000_000);
 requireFile(join(root, "assets/idle_loop.vrma"), 1_000);
-requireFile(join(root, "dist/character.js"), 100);
+requireFile(join(root, "plugins/characters/default/dist/character.js"), 100);
 requireFile(bridge, 10_000);
 requireFile(host, 10_000);
-pass("artifacts", "VRM, VRMA, guest bundle, Vision bridge, and host exist");
+pass("artifacts", "default character plugin assets, Vision bridge, and host exist");
+
+await $`bun scripts/verify-plugins.ts --runtime`.quiet();
+pass("plugins", "character and background manifests resolve to local runtime files");
+
+await $`bun scripts/verify-character-assets.ts`.quiet();
+pass("generated character", "Golden Horn VRM structure, embedded textures, bones, and morphs are valid");
 
 await $`bun scripts/verify-assets.ts`.quiet();
 pass("integrity", "runtime assets match the pinned SHA-256 manifest");

@@ -18,7 +18,7 @@ written to disk, or sent to a network service; no LLM is used.
 # Fetch pinned VRM/MediaPipe assets and install JS/Python dependencies.
 bun run setup
 
-# Build the Swift Vision bridge, QuickJS guest, and Rust release host.
+# Build the Swift Vision bridge, default character plugin, and Rust release host.
 bun run live:build
 
 # Validate assets, the Swift/Rust protocol, cameras, and a tracked render.
@@ -31,8 +31,13 @@ bun run live:diagnose --camera
 # Start the local camera-driven Pocket window.
 bun run live
 
-# Use an original/licensed VRM 0.x model instead of the development sample.
-bun run live -- --model /absolute/path/to/hero.vrm
+# Start the original golden bull character + sunset wanderland preset.
+bun run live:golden-horn
+bun run live:bilibili
+
+# Select independent character/background plugins.
+bun run live -- --character-plugin /absolute/path/to/character/plugin.json
+bun run live -- --background-plugin /absolute/path/to/background/plugin.json
 
 # Verify full 1920x1080 render/compositor throughput on the local GPU.
 bun run live:benchmark
@@ -45,7 +50,8 @@ The live command opens an opaque 1920×1080, 60 fps avatar-only window. The
 camera remains a local tracking input, but no camera pixels enter the rendered
 output. `--background split` remains available as an explicit alternate mode.
 OBS configuration and background-mode choices are documented in
-[docs/OBS_SETUP.md](docs/OBS_SETUP.md).
+[docs/OBS_SETUP.md](docs/OBS_SETUP.md). The local character/background plugin
+contracts are documented in [docs/PLUGINS.md](docs/PLUGINS.md).
 
 Voice conversion was evaluated and rejected from the product because the
 available target models did not meet the required Chinese speech quality. The
@@ -60,14 +66,17 @@ target/release/pocket-character --tracking off
 target/release/pocket-character --model-info /absolute/path/to/model.vrm
 target/release/pocket-character --tracking mock
 target/release/pocket-character --tracking camera --device CAMERA_UNIQUE_ID
+target/release/pocket-character --character-plugin /absolute/path/to/character/plugin.json
+target/release/pocket-character --background-plugin /absolute/path/to/background/plugin.json
 target/release/pocket-character --tracking camera --output-size 1920x1080 --background split
 target/release/pocket-character --tracking camera --output-size 1920x1080 --background matte
 target/release/pocket-character --tracking camera --output-size 1920x1080 --background clean --clean-plate-delay 5
 ```
 
-The bundled `AvatarSample_A` is visibly a development fixture, not the final
-character. Replace it with an original, properly licensed spider-themed VRM
-0.x before visual review or commercial use. `--model-info` reports missing
+The default character plugin's `AvatarSample_A` is visibly a development
+fixture, not the final character. Replace the plugin with one containing an
+original, properly licensed spider-themed VRM 0.x before visual review or
+commercial use. `--model-info` reports missing
 humanoid bones and whether blink, mouth, smile, brow and eye controls are
 actually present; a good-looking mesh without those controls will still track
 poorly. Use `--vrma /absolute/path/to/idle.vrma` to override the idle
@@ -96,7 +105,7 @@ measurement section below for the answer.
 - **Widget window**: 450×600 (airi's stage geometry), transparent,
   undecorated, always-on-top, drag anywhere to move, frame-paced at 60 fps
   (the loop sleeps; `--max-fps` to taste).
-- **Guest policy bundle** (`app/main.ts` → QuickJS): the `character` surface
+- **Character policy bundle** (`plugins/characters/*/main.ts` → QuickJS): the `character` surface
   delivers per-tick facts (`blink`, `hovered`, `fps`, events) and accepts
   intent ops (`setTracking`, `setExpression`, `playClip`, `quit`). The
   airi-parity personality is deliberately near-empty policy; a different
@@ -111,7 +120,9 @@ measurement section below for the answer.
 | `crates/pocket-live-core` | tracking contract, calibration, filtering and gesture FSM |
 | `native/PocketVisionBridge` | AVFoundation capture, Apple body/hands/person matte and shared frames |
 | `native/mediapipe_face_bridge.py` | pinned local semantic face inference |
-| `app/` | guest bundle: `character` surface SDK + policy |
+| `plugin-sdk/` | stable TypeScript API shared by character plugins |
+| `plugins/characters/` | local character manifests, assets and policy entries |
+| `plugins/backgrounds/` | local background manifests and WGSL themes |
 | `scripts/` | Bun TS: asset fetch, bundle build, run, measurement |
 | `vendor/pocketjs` | the engine, pinned as a submodule |
 
@@ -142,11 +153,12 @@ bun run widget
 Ctrl-C. Once built, launch directly:
 
 ```sh
-target/release/pocket-character                # 60 fps (parity default)
+target/release/pocket-character                # default character + comic background
+target/release/pocket-character --background transparent # 450×600 parity widget
 target/release/pocket-character --max-fps 30   # low-power variant
 ```
 
-What you should see: a transparent, undecorated, always-on-top 450×600
+With `--background transparent`, you should see a transparent, undecorated, always-on-top 450×600
 window with the character idling — looping motion, blinks every 1–6 s, eye
 saccades, hair/hood physics. Drag anywhere on the character to move it.
 

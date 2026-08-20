@@ -163,6 +163,79 @@ if (!source.includes("next_redraw: Instant")) {
   changed = true;
 }
 
+if (!source.includes("pub fullscreen: bool")) {
+  replaceOnce(
+    `use winit::window::{CursorGrabMode, Window, WindowId, WindowLevel};`,
+    `use winit::window::{CursorGrabMode, Fullscreen, Window, WindowId, WindowLevel};`,
+  );
+  replaceOnce(
+    `    pub drag_window: bool,
+}`,
+    `    pub drag_window: bool,
+    /// Borderless native fullscreen on the selected monitor.
+    pub fullscreen: bool,
+    /// Case-insensitive monitor-name match used by fullscreen mode.
+    pub monitor_name: Option<String>,
+}`,
+  );
+  replaceOnce(
+    `            drag_window: false,
+        }`,
+    `            drag_window: false,
+            fullscreen: false,
+            monitor_name: None,
+        }`,
+  );
+  replaceOnce(
+    `        let window = Arc::new(event_loop.create_window(attrs)?);`,
+    `        if self.config.fullscreen {
+            let requested = self.config.monitor_name.as_deref();
+            let monitors = event_loop.available_monitors().collect::<Vec<_>>();
+            let named_monitor = requested.and_then(|needle| {
+                monitors.iter().find(|monitor| {
+                    monitor.name().is_some_and(|name| {
+                        name.eq_ignore_ascii_case(needle)
+                            || name.to_lowercase().contains(&needle.to_lowercase())
+                    })
+                })
+            });
+            // Some macOS/winit combinations expose an empty display name.
+            // A requested non-primary output then falls back to the widest
+            // physical display, which is the dedicated 4K program monitor.
+            let monitor = named_monitor
+                .cloned()
+                .or_else(|| {
+                    requested.and_then(|_| {
+                        monitors
+                            .iter()
+                            .max_by_key(|monitor| {
+                                let size = monitor.size();
+                                u64::from(size.width) * u64::from(size.height)
+                            })
+                            .cloned()
+                    })
+                })
+                .or_else(|| event_loop.primary_monitor());
+            if let Some(actual) = monitor.as_ref() {
+                let size = actual.size();
+                let position = actual.position();
+                eprintln!(
+                    "fullscreen monitor: requested={} selected={} size={}x{} position={},{}",
+                    requested.unwrap_or("primary"),
+                    actual.name().unwrap_or_else(|| "unnamed".into()),
+                    size.width,
+                    size.height,
+                    position.x,
+                    position.y,
+                );
+            }
+            attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(monitor)));
+        }
+        let window = Arc::new(event_loop.create_window(attrs)?);`,
+  );
+  changed = true;
+}
+
 if (changed) {
   await Bun.write(file, source);
   console.log("applied Pocket Live window patch to pinned PocketJS");

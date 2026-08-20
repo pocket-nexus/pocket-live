@@ -34,7 +34,7 @@ its "3D digital human" stage, with airi's own defaults:
 - **Surface** (`character`): string-keyed namespace mounted next to `ui`
   (the open-strike `strike` pattern — no numeric op registry). Facts flow
   guest-ward as per-tick events; intent flows core-ward as queued commands.
-- **Guest** (QuickJS, one bundle): behavior policy — which motion plays,
+- **Guest** (QuickJS, one character-plugin bundle): behavior policy — which motion plays,
   expression changes, tracking mode, window intents. The airi-parity behavior
   is the base program; a different character personality is just a different
   bundle.
@@ -67,7 +67,10 @@ widget cadence. The guest's per-frame work is a few property reads.
 - `crates/pocket-character`: the macOS widget host — winit window in widget
   mode, wgpu renderer via pocket3d, `character` surface mounting, cursor
   event wiring, perf instrumentation (RSS/CPU/frame-time counters).
-- `app/`: the guest bundle (SDK + airi-parity behavior policy).
+- `plugin-sdk/`: the stable guest API, independent of any character/theme.
+- `plugins/characters/`: local VRM/VRMA manifests and character policy bundles.
+- `plugins/backgrounds/`: local background manifests and WGSL theme functions;
+  compositor camera/matte/clean/split behavior remains in the native core.
 - `scripts/`: Bun TS only (repo law: no shell scripts) — asset fetch, build,
   measurement harness.
 

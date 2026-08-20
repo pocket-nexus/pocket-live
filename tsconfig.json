@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "types": ["bun-types"]
   },
-  "include": ["app", "scripts"]
+  "include": ["plugin-sdk", "plugins/**/*.ts", "scripts"]
 }

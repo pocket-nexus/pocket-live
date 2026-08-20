@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "kind": "background",
+  "id": "pocket-live.japanese-station",
+  "name": "Japanese Countryside Station",
+  "shader": "background.wgsl",
+  "default_mode": "virtual",
+  "clean_plate_delay_seconds": 3
+}

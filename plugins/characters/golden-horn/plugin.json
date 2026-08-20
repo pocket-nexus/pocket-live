@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "kind": "character",
+  "id": "pocket-live.golden-horn",
+  "name": "Golden Horn Wanderer",
+  "model": "generated/golden-horn.vrm",
+  "idle_animation": "../../../assets/idle_loop.vrma",
+  "policy": {
+    "entry": "main.ts",
+    "bundle": "dist/character.js"
+  },
+  "render": {
+    "max_texture_dimension": 512,
+    "fov_y_degrees": 44,
+    "anchor_height_ratio": 0.52,
+    "camera_distance": 2.2,
+    "split_camera_distance": 2.6
+  }
+}

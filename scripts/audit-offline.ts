@@ -1,7 +1,13 @@
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
-const runtimeRoots = ["app", "crates/pocket-character", "crates/pocket-live-core", "native"];
+const runtimeRoots = [
+  "plugin-sdk",
+  "plugins",
+  "crates/pocket-character",
+  "crates/pocket-live-core",
+  "native",
+];
 const forbidden: Array<[RegExp, string]> = [
   [/\bfetch\s*\(/, "JavaScript fetch"],
   [/\bWebSocket\b/, "JavaScript WebSocket"],

@@ -11,7 +11,10 @@ use pocket3d::gpu::Gpu;
 
 use crate::frame_share::VideoFrame;
 
-const COMPOSITOR_WGSL: &str = r#"
+/// Theme-independent compositor implementation. A background plugin is
+/// prepended and must provide:
+/// `fn plugin_background(uv: vec2f, time: f32) -> vec3f`.
+const COMPOSITOR_CORE_WGSL: &str = r#"
 struct Params {
     mode: u32,
     has_clean: u32,
@@ -40,17 +43,6 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
 @group(0) @binding(2) var mask_tex: texture_2d<f32>;
 @group(0) @binding(3) var linear_sampler: sampler;
 @group(0) @binding(4) var<uniform> params: Params;
-
-fn comic_background(uv: vec2f) -> vec3f {
-    let center = distance(uv, vec2f(0.5, 0.48));
-    let pulse = 0.04 * sin(params.time * 0.8 + center * 18.0);
-    let top = vec3f(0.035, 0.055, 0.11);
-    let bottom = vec3f(0.22, 0.025, 0.07);
-    var color = mix(top, bottom, clamp(uv.y + pulse, 0.0, 1.0));
-    let grid = step(0.88, fract(uv.x * 80.0)) * step(0.88, fract(uv.y * 45.0));
-    color += vec3f(0.12, 0.03, 0.08) * grid;
-    return color;
-}
 
 fn feathered_mask(uv: vec2f) -> f32 {
     if params.has_mask == 0u { return 0.0; }
@@ -91,22 +83,22 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
             discard;
         }
         // The first pass only fills transparent pixels. The avatar therefore
-        // remains over the comic background on the right; a source-replace
+        // remains over the plugin background on the right; a source-replace
         // second pass then guarantees that nothing can overlap the left pane.
-        return vec4f(select(comic_background(in.uv), textureSample(camera_tex, linear_sampler, split_camera_uv(in.uv)).rgb, in.uv.x < 0.5), 1.0);
+        return vec4f(select(plugin_background(in.uv, params.time), textureSample(camera_tex, linear_sampler, split_camera_uv(in.uv)).rgb, in.uv.x < 0.5), 1.0);
     }
     let camera = textureSample(camera_tex, linear_sampler, in.uv).rgb;
-    let comic = comic_background(in.uv);
+    let background = plugin_background(in.uv, params.time);
     let person = feathered_mask(in.uv);
-    var color = comic;
+    var color = background;
     if params.mode == 1u {
         color = camera;
     } else if params.mode == 2u {
         // Keep the real room, replace the person with a deterministic local
-        // comic background. This needs no clean plate and tolerates camera movement.
-        color = mix(camera, comic, person);
+        // plugin background. This needs no clean plate and tolerates camera movement.
+        color = mix(camera, background, person);
     } else if params.mode == 3u {
-        let replacement = select(comic, textureSample(clean_tex, linear_sampler, in.uv).rgb, params.has_clean != 0u);
+        let replacement = select(background, textureSample(clean_tex, linear_sampler, in.uv).rgb, params.has_clean != 0u);
         color = mix(camera, replacement, person);
     }
     return vec4f(color, 1.0);
@@ -138,8 +130,10 @@ impl BackgroundMode {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct CompositorConfig {
+    pub plugin_id: String,
+    pub shader_source: String,
     pub mode: BackgroundMode,
     pub clean_plate_delay: Duration,
 }
@@ -188,6 +182,12 @@ pub struct VideoCompositor {
 
 impl VideoCompositor {
     pub fn new(gpu: &Gpu, format: wgpu::TextureFormat, cfg: CompositorConfig) -> Self {
+        let shader_source = compositor_shader(&cfg.shader_source);
+        log::info!(
+            "background plugin: id={} mode={:?}",
+            cfg.plugin_id,
+            cfg.mode
+        );
         let layout = bind_group_layout(gpu);
         let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("pocket-live compositor sampler"),
@@ -213,7 +213,7 @@ impl VideoCompositor {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("pocket-live compositor"),
-                source: wgpu::ShaderSource::Wgsl(COMPOSITOR_WGSL.into()),
+                source: wgpu::ShaderSource::Wgsl(shader_source.into()),
             });
         let pipeline_layout = gpu
             .device
@@ -456,6 +456,10 @@ impl VideoCompositor {
     }
 }
 
+fn compositor_shader(plugin_source: &str) -> String {
+    format!("{plugin_source}\n{COMPOSITOR_CORE_WGSL}")
+}
+
 fn bind_group_layout(gpu: &Gpu) -> wgpu::BindGroupLayout {
     gpu.device
         .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -635,5 +639,16 @@ mod tests {
         );
         assert_eq!(BackgroundMode::parse("split"), Some(BackgroundMode::Split));
         assert_eq!(BackgroundMode::parse("remote"), None);
+    }
+
+    #[test]
+    fn background_appearance_is_injected_by_a_plugin() {
+        let plugin =
+            "fn plugin_background(uv: vec2f, time: f32) -> vec3f { return vec3f(uv, time); }";
+        let shader = compositor_shader(plugin);
+        assert!(shader.starts_with(plugin));
+        assert!(shader.contains("plugin_background(in.uv, params.time)"));
+        assert!(!COMPOSITOR_CORE_WGSL.contains("fn plugin_background("));
+        assert!(!COMPOSITOR_CORE_WGSL.contains("comic_background"));
     }
 }

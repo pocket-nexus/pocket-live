@@ -8,6 +8,7 @@
 mod compositor;
 mod frame_share;
 mod guest;
+mod plugins;
 mod tracking;
 mod widget;
 
@@ -20,6 +21,7 @@ use pocket3d::input::Input;
 use pocket3d::renderer::Renderer;
 
 use compositor::{BackgroundMode, CompositorConfig};
+use plugins::{load_background_plugin, load_character_plugin};
 use tracking::{FaceLaunch, VisionLaunch};
 use widget::{Widget, WidgetConfig};
 
@@ -35,12 +37,34 @@ fn main() -> Result<()> {
             .rposition(|a| a == name)
             .and_then(|i| args.get(i + 1).cloned())
     };
+    let has_flag = |name: &str| args.iter().any(|arg| arg == name);
     let root = std::env::var("POCKET_CHARACTER_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
     if let Some(model) = flag("--model-info") {
         return print_model_info(PathBuf::from(model));
     }
+    let character_plugin_path = flag("--character-plugin")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("plugins/characters/default/plugin.json"));
+    let background_plugin_path = flag("--background-plugin")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("plugins/backgrounds/default/plugin.json"));
+    let character_plugin = load_character_plugin(&character_plugin_path)?;
+    let background_plugin = load_background_plugin(&background_plugin_path)?;
+    log::info!(
+        "character plugin: id={} name={} manifest={}",
+        character_plugin.id,
+        character_plugin.name,
+        character_plugin_path.display()
+    );
+    log::info!(
+        "background plugin: id={} name={} manifest={}",
+        background_plugin.id,
+        background_plugin.name,
+        background_plugin_path.display()
+    );
+
     let size = flag("--output-size")
         .as_deref()
         .map(parse_size)
@@ -56,23 +80,29 @@ fn main() -> Result<()> {
             })
         })
         .transpose()?
-        .unwrap_or(BackgroundMode::Transparent);
+        .unwrap_or(background_plugin.default_mode);
     let clean_plate_delay = flag("--clean-plate-delay")
-        .map(|value| value.parse::<f32>())
-        .transpose()
-        .context("--clean-plate-delay must be seconds")?
-        .unwrap_or(3.0);
+        .map(|value| -> Result<std::time::Duration> {
+            let seconds = value
+                .parse::<f32>()
+                .context("--clean-plate-delay must be seconds")?;
+            anyhow::ensure!(seconds.is_finite(), "--clean-plate-delay must be finite");
+            Ok(std::time::Duration::from_secs_f32(seconds.max(0.0)))
+        })
+        .transpose()?
+        .unwrap_or(background_plugin.clean_plate_delay);
 
     let cfg = WidgetConfig {
         model_path: flag("--model")
             .map(PathBuf::from)
-            .unwrap_or_else(|| root.join("assets/AvatarSample_A.vrm")),
+            .unwrap_or(character_plugin.model_path),
         vrma_path: flag("--vrma")
             .map(PathBuf::from)
-            .unwrap_or_else(|| root.join("assets/idle_loop.vrma")),
+            .unwrap_or(character_plugin.idle_animation_path),
         bundle_path: flag("--bundle")
             .map(PathBuf::from)
-            .unwrap_or_else(|| root.join("dist/character.js")),
+            .unwrap_or(character_plugin.policy_bundle_path),
+        render: character_plugin.render,
         size,
         frames: flag("--frames").and_then(|s| s.parse().ok()),
         frame_warmup: flag("--frame-warmup")
@@ -117,8 +147,10 @@ fn main() -> Result<()> {
             _ => None,
         },
         compositor: (background != BackgroundMode::Transparent).then_some(CompositorConfig {
+            plugin_id: background_plugin.id,
+            shader_source: background_plugin.shader_source,
             mode: background,
-            clean_plate_delay: std::time::Duration::from_secs_f32(clean_plate_delay.max(0.0)),
+            clean_plate_delay,
         }),
     };
 
@@ -162,6 +194,8 @@ fn main() -> Result<()> {
             resizable: false,
             max_fps: Some(max_fps),
             drag_window: true,
+            fullscreen: has_flag("--fullscreen"),
+            monitor_name: flag("--monitor"),
         },
         widget,
     )
