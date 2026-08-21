@@ -14,9 +14,12 @@ npm run dev
 
 ## Cloudflare Worker deployment
 
-The production Worker is `pocketlab` in account
+The production Worker is `pocket-live` in account
 `5e97b4b91f8abaf2de54de9f866bfcae`, with the custom domain
 `live.pocketlab.build`.
+
+The existing `pocketlab` Worker and the apex/`www` hostnames are separate and
+must not be modified by this deployment.
 
 ```bash
 npx wrangler login

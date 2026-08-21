@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "pocketlab",
+  "name": "pocket-live",
   "account_id": "5e97b4b91f8abaf2de54de9f866bfcae",
   "compatibility_date": "2026-08-21",
   "compatibility_flags": ["nodejs_compat"],
