@@ -1,6 +1,6 @@
 # Pocket Live site
 
-The product site for [Pocket Live](https://github.com/dozycat/pocket-live), a
+The product site for [Pocket Live](https://github.com/pocket-stack/pocket-live), a
 fully local macOS camera-to-VRM motion-capture pipeline.
 
 ## Local development

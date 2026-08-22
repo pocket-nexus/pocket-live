@@ -26,9 +26,13 @@ test("server-renders the Pocket Live motion-capture site", async () => {
   assert.match(html, /Apple Vision/i);
   assert.match(html, /MediaPipe/i);
   assert.match(html, /Camera frames stay on your Mac/i);
+  assert.match(html, /Star on GitHub/i);
+  assert.match(html, /Download/i);
+  assert.match(html, /A Pocket Lab Project/i);
+  assert.match(html, /Powered by/i);
   assert.match(html, /youtube-nocookie\.com\/embed\/HjOfFSyM-Mc/);
   assert.match(html, /pocket-live-demo\.mp4/);
-  assert.doesNotMatch(html, /Pocket Character|Lose the Chromium|2184 MB|react-loading-skeleton/i);
+  assert.doesNotMatch(html, /Local camera-to-VRM motion capture\.<\/p>|MACOS · APPLE SILICON|Pocket Character|Lose the Chromium|2184 MB|react-loading-skeleton/i);
 });
 
 test("ships compact demo media and the real Pocket Live visuals", async () => {

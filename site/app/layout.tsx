@@ -26,13 +26,13 @@ export async function generateMetadata(): Promise<Metadata> {
       description: "Fully local face, body, and hand tracking for real-time VRM live streams.",
       type: "website",
       url: origin,
-      images: [{ url: `${origin}/og.png`, width: 1731, height: 909, alt: "Pocket Live social card" }],
+      images: [{ url: `${origin}/og-v2.png`, width: 1731, height: 909, alt: "Pocket Live — Live as your avatar" }],
     },
     twitter: {
       card: "summary_large_image",
       title: "Pocket Live — Local motion capture",
       description: "Your camera in. Your character out. No cloud required.",
-      images: [`${origin}/og.png`],
+      images: [`${origin}/og-v2.png`],
     },
   };
 }
