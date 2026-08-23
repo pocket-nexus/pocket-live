@@ -5,10 +5,14 @@ out/
 assets/*.vrm
 assets/*.vrma
 assets/*.task
+# Licensed character conversions that may be used locally but must not be
+# redistributed with this repository.
+plugins/characters/niulai-local/
 *.log
 .DS_Store
 artifacts/
 plugins/characters/*/generated/
 **/.build/
+**/.derived/
 .venv/
 __pycache__/
